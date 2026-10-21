@@ -1,85 +1,1147 @@
-import {SURAHS,surah,passageLabel} from './surahs.js';
-import {dateISO,addDays,dueToday,ratePassage,pendingMistakes} from './schedule.js';
+import { SURAHS, surah, passageLabel } from './surahs.js';
+import {
+  dateISO,
+  addDays,
+  daysBetween,
+  dueQueue,
+  phase,
+  reviewInterval,
+  ratePassage,
+  pendingMistakes,
+} from './schedule.js';
+import {
+  EDITION,
+  validateState,
+  validatePassage,
+  overlaps,
+  inPassage,
+  parseBackup,
+  backupOf,
+  activeSessionPassages,
+} from './model.js';
+import { openStorage, LEGACY_KEY } from './storage.js';
+import { VoiceRecorder, transcribeMistakes } from './voice.js';
 
-const STORE='hifz-qalun:v1';
-const DEFAULT={passages:[],mistakes:[],revisionHistory:[],settings:{}};
-let data=load();
-let currentView='today';
-let geminiKey=sessionStorage.getItem('hifz-gemini-key')||'';
-let recording=null;
-let voiceQueue=[];
-const $=(selector,base=document)=>base.querySelector(selector);
-const $$=(selector,base=document)=>[...base.querySelectorAll(selector)];
-const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const uid=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const today=()=>dateISO();
-const friendlyDate=d=>new Date(`${d}T12:00:00`).toLocaleDateString(undefined,{month:'short',day:'numeric'});
-function load(){try {const val=JSON.parse(localStorage.getItem(STORE));return val && Array.isArray(val.passages)&&Array.isArray(val.mistakes)?{...DEFAULT,...val}:structuredClone(DEFAULT)}catch{return structuredClone(DEFAULT)}}
-function save(){try{localStorage.setItem(STORE,JSON.stringify(data))}catch{alert('Storage is full or unavailable. Export your backup in Settings.')}}
-function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('visible'),2900)}
-function showView(view){currentView=view;$$('.view').forEach(el=>el.classList.toggle('active',el.id===`view-${view}`));$$('[data-nav]').forEach(el=>el.classList.toggle('active',el.classList.contains('nav-item')&&el.dataset.nav===view));document.documentElement.scrollTop=0;window.scrollTo({top:0,behavior:'instant'});render()}
-function openModal(title,html){$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;$('#modal-backdrop').hidden=false;document.body.style.overflow='hidden';$('.sheet').scrollTop=0}
-function closeModal(){if(recording){stopRecording();recording=null}$('#modal-backdrop').hidden=true;$('#modal-body').innerHTML='';document.body.style.overflow=''}
-function itemHtml(entry){const isNew=(dateISO()===entry.created)||(!entry.lastReviewed&&entry.interval===1);
-const overdue=entry.nextDue<today();
-return `<article class="card"><div class="card-head"><div><div class="passage-name">${safe(passageLabel(entry))}</div><div class="card-sub">${safe(entry.pages)} pages · ${entry.reviews?.length||0} reviews${entry.note?` · ${safe(entry.note)}`:''}</div></div><span class="tag ${isNew?'fresh':overdue?'late':''}">${isNew?'Fresh':overdue?'Overdue':'Due'}</span></div><div class="rating-row"><button data-rate="hard" data-id="${entry.id}">Difficult</button><button data-rate="good" data-id="${entry.id}">Good</button><button data-rate="easy" data-id="${entry.id}">Easy</button></div></article>`}
-function mistakeCard(m,compact=false){const title=`${surah(m.surah).name} · ayah ${m.ayah||'?'}`;const words=m.said||m.correct?`<div class="mistake-words"><span class="wrong arabic">${safe(m.said)||'—'}</span><span>→</span><span class="right arabic">${safe(m.correct)||'—'}</span></div>`:'';
-return `<article class="card"><div class="card-head"><div><div class="passage-name">${safe(title)}</div><div class="card-sub">${safe(m.type||'Mistake')} · ${friendlyDate(m.date)}</div></div><span class="tag ${m.resolved?'':'fresh'}">${m.resolved?'Solid':'Practice'}</span></div>${words}${m.note?`<div class="mistake-note">${safe(m.note)}</div>`:''}${m.resolved?'':`<div class="button-row"><button class="soft-btn" data-mistake-repeat="${m.id}">Reviewed again</button><button class="outline-btn" data-mistake-solid="${m.id}">Mark solid ✓</button></div>`}${compact?'':`<div class="button-row"><button class="link-btn" data-mistake-edit="${m.id}">Edit</button><button class="link-btn" data-mistake-delete="${m.id}">Delete</button></div>`}</article>`}
-function render(){const due=data.passages.filter(e=>dueToday(e));const completed=data.passages.filter(e=>e.lastReviewed===today()).length;$('#date-label').textContent=`${new Date().toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'}).toUpperCase()} · YOUR DAILY PRACTICE`;
-$('#due-count').textContent=due.length;$('#due-pages').textContent=Number(due.reduce((n,e)=>n+(Number(e.pages)||0),0).toFixed(2)).toString();$('#completed-count').textContent=completed;
-$('#today-plan').innerHTML=due.length?due.sort((a,b)=>Number(a.interval)-Number(b.interval)||String(a.nextDue).localeCompare(String(b.nextDue))).map(itemHtml).join(''):`<div class="empty"><div class="empty-ico">☘</div>${data.passages.length?'All scheduled passages are caught up.':'No passages yet. Start by adding what you have memorized.'}<br><button class="soft-btn" data-nav="pages" style="margin-top:13px">${data.passages.length?'See your pages':'Add your first passage'}</button></div>`;
-const weak=pendingMistakes(data.mistakes);$('#today-mistakes').innerHTML=weak.length?weak.slice(0,6).map(m=>mistakeCard(m,true)).join(''):`<div class="empty"><div class="empty-ico">✦</div>${data.mistakes.length?'No mistakes scheduled to revisit today.':'Your mistakes to revisit will appear here.'}</div>`;
-$('#mistake-count').textContent=data.mistakes.filter(m=>!m.resolved).length;
-$('#mistake-list').innerHTML=data.mistakes.length?[...data.mistakes].sort((a,b)=>b.date.localeCompare(a.date)).map(m=>mistakeCard(m)).join(''):`<div class="empty"><div class="empty-ico">✎</div>No mistakes logged yet.<br>Record one while revising.</div>`;
-$('#library-count').textContent=data.passages.length;$('#library-stats').textContent=`${Number(data.passages.reduce((s,p)=>s+(Number(p.pages)||0),0).toFixed(2))} page equivalents · ${SURAHS.length} Qalun surahs available`;
-$('#library-list').innerHTML=data.passages.length?[...data.passages].sort((a,b)=>Number(a.fromS)-Number(b.fromS)||Number(a.fromA)-Number(b.fromA)).map(p=>`<article class="card"><div class="card-head"><div><div class="passage-name">${safe(passageLabel(p))}</div><div class="card-sub">${safe(p.pages)} pages · Next: ${p.paused?'Paused':friendlyDate(p.nextDue)} · Every ${p.interval||1} day(s)</div>${p.note?`<div class="mistake-note">${safe(p.note)}</div>`:''}</div><span class="tag ${p.paused?'late':''}">${p.paused?'Paused':'Active'}</span></div><div class="button-row"><button class="soft-btn" data-page-edit="${p.id}">Edit</button><button class="outline-btn" data-page-pause="${p.id}">${p.paused?'Resume':'Pause'}</button><button class="danger-btn" data-page-remove="${p.id}" aria-label="Delete">✕</button></div></article>`).join(''):`<div class="empty"><div class="empty-ico">▤</div>Add a passage you know: a half-page, a full page, or an exact ayah range.</div>`}
-function surahOptions(selected=2){return SURAHS.map(s=>`<option value="${s.id}" ${s.id===Number(selected)?'selected':''}>${s.id}. ${safe(s.name)} · ${s.count} ayat</option>`).join('')}
-function resetAyahSelect(selectS,selectA,preferred){const s=surah(Number(selectS.value));const wanted=Number(preferred??selectA.value);selectA.innerHTML=Array.from({length:s.count},(_,i)=>`<option value="${i+1}">${i+1}</option>`).join('');selectA.value=String(Math.min(Math.max(wanted,1),s.count))}
-function passageForm(id){const item=id?data.passages.find(p=>p.id===id):null;const p=item||{fromS:2,fromA:74,toS:2,toA:85,pages:0.5,created:today(),interval:1,note:''};
-openModal(item?'Edit memorized passage':'Add memorized passage',`<form id="passage-form"><div class="alert success">Using Qalun verse counts (العد المدني الأخير). Exact page boundaries differ by Mushaf: enter the ayah range and how much of a page it covers.</div><label class="form-label">From</label><div class="field-grid"><select id="fromS" class="form-field">${surahOptions(p.fromS)}</select><select id="fromA" class="form-field"></select></div><label class="form-label">To (inclusive)</label><div class="field-grid"><select id="toS" class="form-field">${surahOptions(p.toS)}</select><select id="toA" class="form-field"></select></div><div class="form-row"><div><label class="form-label" for="pages">Length (pages)</label><input id="pages" class="form-field" type="number" min="0.25" max="100" step="0.25" value="${safe(p.pages)}" required><div class="form-hint">Examples: 0.5, 1, 1.5, 2</div></div><div><label class="form-label" for="interval">Initial frequency</label><select id="interval" class="form-field"><option value="1">Daily</option><option value="2">Every 2 days</option><option value="3">About twice a week</option><option value="7">Weekly</option></select></div></div><label class="form-label" for="created">First memorized on</label><input type="date" id="created" class="form-field" value="${safe(p.created)}" max="${today()}" required><label class="form-label" for="note">Mushaf page / note (optional)</label><input id="note" class="form-field" placeholder="e.g. end of page 18, half page" value="${safe(p.note)}" maxlength="140"><div class="form-hint">We will never guess the physical page number or assume an equal number of ayat per page.</div><button class="primary-btn wide" style="margin-top:22px" type="submit">${item?'Save changes':'Add to my revision'}</button></form>`);
-const fS=$('#fromS'),fA=$('#fromA'),tS=$('#toS'),tA=$('#toA');resetAyahSelect(fS,fA,p.fromA);resetAyahSelect(tS,tA,p.toA);$('#interval').value=String(p.interval||1);if(![1,2,3,7].includes(Number(p.interval))){$('#interval').innerHTML+=`<option value="${p.interval}">Every ${p.interval} days</option>`;$('#interval').value=p.interval}
-fS.addEventListener('change',()=>{resetAyahSelect(fS,fA,1);if(Number(tS.value)<Number(fS.value)){tS.value=fS.value;resetAyahSelect(tS,tA,surah(tS.value).count)}});tS.addEventListener('change',()=>resetAyahSelect(tS,tA,surah(tS.value).count));
-$('#passage-form').addEventListener('submit',e=>{e.preventDefault();const aS=Number(fS.value),bS=Number(tS.value),aA=Number(fA.value),bA=Number(tA.value),pages=Number($('#pages').value),created=$('#created').value,interval=Number($('#interval').value);if(bS<aS||(bS===aS&&bA<aA)){toast('The ending ayah must come after the starting ayah');return}if(!(pages>=0.25&&pages<=100)||!created){toast('Check length and date');return}const vals={fromS:aS,fromA:aA,toS:bS,toA:bA,pages,created,interval,note:$('#note').value.trim()};if(item){const wasInterval=item.interval;Object.assign(item,vals);if(wasInterval!==interval)item.nextDue=addDays(today(),interval)}else{data.passages.push({...vals,id:uid(),nextDue:today(),reviews:[],hardCount:0,paused:false})}save();closeModal();showView('pages');toast(item?'Passage updated':'Passage added to today’s plan')})}
+const micIcon =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>';
+let voiceKey = '',
+  voiceSession = null;
 
-const TYPE_OPTIONS=[['substitution','Wrong word'],['ending','Pronoun / ending'],['recall','Could not continue'],['order','Wrong order'],['other','Other']];
-function mistakeForm(existing=null){voiceQueue=[];const m=existing||{surah:2,ayah:'',type:'substitution',said:'',correct:'',note:'',date:today()};
-openModal(existing?'Edit mistake':'Record a mistake',`<div class="alert">Write or record what happened. Gemini only organizes what you say: always check the ayah and correction against your Qalun Mushaf.</div>${existing?'':`<button type="button" id="record-audio" class="record-btn">🎙 &nbsp; Start voice recording with Gemini</button><input type="file" id="audio-file" accept="audio/*" style="display:none"><button type="button" class="link-btn" id="choose-audio" style="width:100%;padding:11px">Or choose an audio recording</button><div id="voice-status" class="form-hint" role="status"></div><textarea class="form-field" id="voice-text" rows="2" placeholder="Or type: I said الضلالة instead of الحياة in Al-Baqarah ayah 85" style="margin-top:10px"></textarea><button class="outline-btn wide" id="process-text" type="button" style="margin-top:9px">Organize text with Gemini</button><div class="section-divider"></div>`}
-<form id="mistake-form"><label class="form-label" for="msurah">Surah (Qalun)</label><select id="msurah" class="form-field">${surahOptions(m.surah)}</select><label class="form-label" for="mayah">Ayah</label><select id="mayah" class="form-field"></select><label class="form-label">Mistake type</label><select id="mtype" class="form-field">${TYPE_OPTIONS.map(([v,l])=>`<option value="${v}" ${m.type===v?'selected':''}>${l}</option>`).join('')}</select><div class="form-row"><div><label class="form-label" for="msaid">What I said</label><textarea id="msaid" class="form-field arabic" rows="2" dir="rtl" placeholder="الضلالة">${safe(m.said)}</textarea></div><div><label class="form-label" for="mcorrect">Correct</label><textarea id="mcorrect" class="form-field arabic" rows="2" dir="rtl" placeholder="الحياة">${safe(m.correct)}</textarea></div></div><label class="form-label" for="mnote">Notes / passage I forgot</label><textarea id="mnote" class="form-field" rows="2" placeholder="Where you got stuck">${safe(m.note)}</textarea><label class="form-label" for="mdate">Date</label><input id="mdate" type="date" class="form-field" value="${safe(m.date)}" max="${today()}"><button class="primary-btn wide" type="submit" style="margin-top:21px">${existing?'Save changes':'Save mistake'}</button></form>`);
-const s=$('#msurah'),a=$('#mayah');resetAyahSelect(s,a,m.ayah||1);a.insertAdjacentHTML('afterbegin','<option value="0">Unknown ayah</option>');if(!m.ayah)a.value='0';s.addEventListener('change',()=>{resetAyahSelect(s,a,1);a.insertAdjacentHTML('afterbegin','<option value="0">Unknown ayah</option>')});
-$('#mistake-form').addEventListener('submit',e=>{e.preventDefault();const input={surah:Number(s.value),ayah:Number(a.value),type:$('#mtype').value,said:$('#msaid').value.trim(),correct:$('#mcorrect').value.trim(),note:$('#mnote').value.trim(),date:$('#mdate').value||today()};if(!input.said&&!input.correct&&!input.note){toast('Describe the mistake or forgotten passage');return}if(existing)Object.assign(existing,input);else data.mistakes.push({...input,id:uid(),nextDue:addDays(input.date,1),resolved:false,revisits:0});save();if(!existing&&voiceQueue.length){const next=voiceQueue.shift();fillParsed(next);$('#mdate').value=today();toast(`Saved. ${voiceQueue.length+1} entry to verify.`)}else{closeModal();showView('mistakes');toast(existing?'Mistake updated':'Saved. Review scheduled for tomorrow.')}});
-if(!existing){$('#record-audio').addEventListener('click',toggleRecording);$('#process-text').addEventListener('click',async()=>{const text=$('#voice-text').value.trim();if(!text){toast('Type your mistake first');return}await processVoice([{text}])});$('#choose-audio').addEventListener('click',()=>$('#audio-file').click());$('#audio-file').addEventListener('change',async e=>{const blob=e.target.files[0];if(blob)await processAudio(blob)})}}
-function fillParsed(m){if(!$('#mistake-form'))return;const s=$('#msurah');s.value=String(Math.max(1,Math.min(114,Number(m.surah_number||m.surah||2))));resetAyahSelect(s,$('#mayah'),Number(m.ayah_number||m.ayah||1));$('#mayah').insertAdjacentHTML('afterbegin','<option value="0">Unknown ayah</option>');if(!Number(m.ayah_number||m.ayah))$('#mayah').value='0';const type=String(m.type||'other');$('#mtype').value=TYPE_OPTIONS.some(([v])=>v===type)?type:'other';$('#msaid').value=String(m.said||'');$('#mcorrect').value=String(m.correct||'');$('#mnote').value=String(m.note||'');$('#voice-status').textContent='✓ Gemini drafted the entry. Check it against the Mushaf and tap Save mistake.'}
-function noteStatus(message){const el=$('#voice-status');if(el)el.textContent=message}
-async function processAudio(blob){if(!geminiKey){noteStatus('Add your Gemini API key in Settings first. You can still log manually.');return}if(blob.size>13*1024*1024){noteStatus('Recording is too large. Keep clips brief (under about 13 MB).');return}noteStatus('Processing audio with Gemini…');try {const base64=await new Promise((res,rej)=>{const reader=new FileReader();reader.onload=()=>res(String(reader.result).split(',')[1]);reader.onerror=rej;reader.readAsDataURL(blob)});await processVoice([{inlineData:{mimeType:blob.type.split(';')[0]||'audio/webm',data:base64}}])}catch(e){noteStatus(`Could not process recording: ${e.message}. You can fill in the form manually.`)}}
-async function processVoice(parts){if(!geminiKey){noteStatus('Please set a Gemini API key in Settings first.');return}const old=$('#process-text');if(old)old.disabled=true;noteStatus('Gemini is organizing your description…');try{
-const prompt=`You are extracting personally reported Quran memorization mistakes, NOT checking recitation. The user memorizes using QALUN AN NAFI' (Madani al-akhir ayah numbering, not Hafs). Their likely current surah is ${surah(Number($('#msurah')?.value)||2).name} (${Number($('#msurah')?.value)||2}). Extract every distinct mistake explicitly described in the audio or text, in Arabic or English. Return JSON only: {"mistakes":[{"surah_number":2,"ayah_number":85,"said":"الضلالة","correct":"الحياة","type":"substitution","note":""}]}. Valid type: substitution, ending, recall, order, other. If speaker says they couldn't continue, type=recall, said/correct can be empty and note includes the point they got stuck. Do NOT invent an ayah, verse, correct word, or evidence. For unknown surah assume the provided current surah; for unknown ayah use 0. Keep any Arabic as spoken, avoid automatic Quran correction. An unclear recording should return mistakes:[] rather than fabricate.`;
-const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':geminiKey},body:JSON.stringify({contents:[{parts:[{text:prompt},...parts]}],generationConfig:{responseMimeType:'application/json',temperature:0.1}})});
-const json=await response.json();if(!response.ok)throw new Error(json?.error?.message||`HTTP ${response.status}`);const raw=json?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||'';const parsed=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''));const items=Array.isArray(parsed.mistakes)?parsed.mistakes:[];if(!items.length){noteStatus('Gemini did not find a clear mistake. Enter it manually.');return}voiceQueue=items.slice(1);fillParsed(items[0]);if(voiceQueue.length)noteStatus(`Entry 1 of ${items.length}. Verify and save each one individually.`)
-}catch(e){noteStatus(`Gemini could not complete this request: ${e.message}. You can still enter the mistake manually.`)}finally{if(old)old.disabled=false}}
-async function toggleRecording(){const btn=$('#record-audio');if(recording){stopRecording();return}if(!geminiKey){noteStatus('Add your personal Gemini API key in Settings before recording, or type the mistake manually.');return}if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){noteStatus('Recording is unavailable on this browser. Use the audio file option or type instead.');return}try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});const preferred=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t));const rec=new MediaRecorder(stream,preferred?{mimeType:preferred}:undefined);const chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());if(chunks.length)processAudio(new Blob(chunks,{type:rec.mimeType||'audio/webm'}))};recording=rec;rec.start();btn.classList.add('active');btn.textContent='■  Stop & process recording';noteStatus('Recording… describe one or more mistakes, then tap Stop.')}catch(e){noteStatus(`Microphone unavailable: ${e.message}. HTTPS and permission are required.`)}}
-function stopRecording(){if(!recording)return;const r=recording;recording=null;if(r.state!=='inactive')r.stop();const btn=$('#record-audio');if(btn){btn.classList.remove('active');btn.textContent='🎙 Start voice recording with Gemini'}}
-function settingsModal(){openModal('Settings',`<p class="help-block">Riwayah: <b>قالون عن نافع</b><br>Verse numbering: <b>العد المدني الأخير</b> · 6,214 ayat. Physical-page lengths are entered by you.</p><div class="section-divider"></div><label class="form-label" for="gemini-key">Gemini API key (optional)</label><div class="set-row"><input class="form-field" type="password" id="gemini-key" autocomplete="off" placeholder="Paste personal key" value="${safe(geminiKey)}"><button class="soft-btn" id="gemini-save">Save</button></div><p class="small-muted">Stored only in this browser tab/session, never in the downloaded app. Direct browser requests still expose the key in browser developer tools; suitable for personal testing, not a publicly shared production app. For production, use a server-side proxy and restrictions. Google free-tier limits and data terms apply.</p><a href="https://aistudio.google.com/apikey" rel="noopener" target="_blank" class="linklike" style="font-size:12px">Get a Gemini API key ↗</a><div class="section-divider"></div><h2>Back up your data</h2><p class="small-muted">Reviews and mistakes live only on this device. Export a backup periodically; clearing website data or changing phones can remove them.</p><div class="button-row"><button class="outline-btn" id="export-data">↓ Export backup</button><button class="outline-btn" id="import-data">↑ Import backup</button></div><input type="file" id="backup-file" accept="application/json,.json" hidden><div class="section-divider"></div><p class="small-muted">Surah and ayah metadata: <a class="linklike" target="_blank" rel="noopener" href="https://quranpedia.app/quran/qaloon/index.html">Quranpedia Qalun surah index</a>. This app does not contain or validate full Quran verse text. Review corrections with your Mushaf.</p>`);
-$('#gemini-save').addEventListener('click',()=>{geminiKey=$('#gemini-key').value.trim();if(geminiKey)sessionStorage.setItem('hifz-gemini-key',geminiKey);else sessionStorage.removeItem('hifz-gemini-key');toast(geminiKey?'Key available for this browser session':'Key cleared')});
-$('#export-data').addEventListener('click',()=>{const blob=new Blob([JSON.stringify({type:'hifz-qalun-backup',version:1,exportedAt:new Date().toISOString(),data},null,2)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`hifz-qalun-${today()}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),2000);toast('Backup downloaded')});
-$('#import-data').addEventListener('click',()=>$('#backup-file').click());$('#backup-file').addEventListener('change',async e=>{try{const f=e.target.files[0];if(!f)return;const imported=JSON.parse(await f.text());if(imported.type!=='hifz-qalun-backup'||!Array.isArray(imported.data?.passages)||!Array.isArray(imported.data?.mistakes))throw new Error('Not a valid Hifz backup');if(!confirm('Replace current passages and mistakes with this backup?'))return;data={...DEFAULT,...imported.data};save();closeModal();render();toast('Backup restored')}catch(e){alert(`Import failed: ${e.message}`)}})}
+const $ = (selector, base = document) => base.querySelector(selector);
+const safe = (value) =>
+  String(value ?? '').replace(
+    /[&<>"']/g,
+    (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char],
+  );
+const uid = () => crypto.randomUUID();
+const fmt = (number) => Number(number.toFixed(2)).toString();
+const sumPages = (passages) => passages.reduce((sum, p) => sum + p.pages, 0);
+const friendly = (day) =>
+  new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const ratingNames = { hard: 'Difficult', good: 'Good', easy: 'Easy' };
+const types = {
+  recall: 'Could not continue',
+  substitution: 'Wrong word',
+  ending: 'Ending / pronoun',
+  order: 'Wrong order',
+  other: 'Other',
+};
+let state,
+  storage,
+  view = 'today',
+  busy = false,
+  pending = 0,
+  saveQueue = Promise.resolve();
+let libraryFilter = 'all',
+  mistakeFilter = 'practice',
+  lastDay = dateISO(),
+  installPrompt,
+  registration;
+const channel = 'BroadcastChannel' in globalThis ? new BroadcastChannel('hifz-data') : null;
 
-function clickAction(event){const btn=event.target.closest('button');if(!btn)return;
-if(btn.dataset.nav){showView(btn.dataset.nav);return}
-if(btn.id==='settings-open'){settingsModal();return}
-if(btn.id==='modal-close'){closeModal();return}
-if(btn.id==='add-pages'){passageForm();return}
-if(btn.id==='new-mistake'||btn.id==='quick-mistake'){mistakeForm();return}
-if(btn.dataset.rate){const item=data.passages.find(x=>x.id===btn.dataset.id);if(!item)return;const replacement=ratePassage(item,btn.dataset.rate);Object.assign(item,replacement);save();render();toast(`Reviewed! Next due ${friendlyDate(item.nextDue)}`);return}
-if(btn.dataset.pageEdit){passageForm(btn.dataset.pageEdit);return}
-if(btn.dataset.pagePause){const p=data.passages.find(x=>x.id===btn.dataset.pagePause);if(!p)return;p.paused=!p.paused;save();render();toast(p.paused?'Paused':'Resumed');return}
-if(btn.dataset.pageRemove){if(!confirm('Remove this memorized passage? Its review history will be deleted.'))return;data.passages=data.passages.filter(p=>p.id!==btn.dataset.pageRemove);save();render();toast('Passage removed');return}
-if(btn.dataset.mistakeRepeat){const m=data.mistakes.find(x=>x.id===btn.dataset.mistakeRepeat);if(!m)return;m.lastRevisited=today();m.revisits=(m.revisits||0)+1;m.nextDue=addDays(today(),m.revisits===1?2:Math.min(14,2**m.revisits));save();render();toast('Good. Scheduled again for reinforcement.');return}
-if(btn.dataset.mistakeSolid){const m=data.mistakes.find(x=>x.id===btn.dataset.mistakeSolid);if(!m)return;m.resolved=true;m.lastRevisited=today();save();render();toast('Marked as solid');return}
-if(btn.dataset.mistakeEdit){mistakeForm(data.mistakes.find(x=>x.id===btn.dataset.mistakeEdit));return}
-if(btn.dataset.mistakeDelete){if(!confirm('Delete this mistake record?'))return;data.mistakes=data.mistakes.filter(m=>m.id!==btn.dataset.mistakeDelete);save();render();toast('Mistake deleted');return}
+// Reserve the real fixed-bar height for every page, including empty states.
+// Measuring also covers text scaling, orientation changes, and safe-area padding.
+function syncNavigationSpace() {
+  const navigation = $('.navigation');
+  const height =
+    getComputedStyle(navigation).position === 'fixed'
+      ? Math.ceil(navigation.getBoundingClientRect().height)
+      : 0;
+  document.documentElement.style.setProperty('--navigation-clearance', `${height}px`);
 }
-document.addEventListener('click',clickAction);
-$('#modal-backdrop').addEventListener('click',e=>{if(e.target.id==='modal-backdrop')closeModal()});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#modal-backdrop').hidden)closeModal()});
-if('serviceWorker' in navigator&&location.protocol!=='file:')window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
-render();
+if ('ResizeObserver' in globalThis)
+  new ResizeObserver(syncNavigationSpace).observe($('.navigation'), { box: 'border-box' });
+window.addEventListener('resize', syncNavigationSpace);
+syncNavigationSpace();
+
+function toast(message) {
+  $('#toast').textContent = message;
+  $('#toast').classList.add('visible');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => $('#toast').classList.remove('visible'), 3500);
+}
+function error(message) {
+  $('#save-error').hidden = false;
+  $('#save-error').innerHTML = `${safe(message)} <button data-action="reload">Reload Hifz</button>`;
+  if ($('#modal').open) {
+    $('#modal-error').textContent = message;
+    $('#modal-error').hidden = false;
+  }
+}
+// Mutate a copy, commit atomically, then report success. Failed writes leave forms open.
+function change(mutator, { renderAfter = true, restore = false } = {}) {
+  pending++;
+  const task = saveQueue
+    .then(async () => {
+      const next = structuredClone(state);
+      await mutator(next);
+      state = await storage.write(validateState(next), { expectedRevision: state.revision, restore });
+      $('#save-error').hidden = true;
+      channel?.postMessage({ revision: state.revision });
+      if (renderAfter) render();
+      return true;
+    })
+    .catch((reason) => {
+      error(reason.message);
+      return false;
+    })
+    .finally(() => pending--);
+  saveQueue = task;
+  return task;
+}
+function pageHeading(title, subtitle, eyebrow = 'YOUR DAILY PRACTICE', action = '') {
+  return `<header class="page-heading"><div class="eyebrow">${safe(eyebrow)}</div><div class="row between"><h1>${title}</h1>${action}</div>${subtitle ? `<p class="lede">${subtitle}</p>` : ''}</header>`;
+}
+function empty(title, description, action = '') {
+  return `<div class="empty"><div class="empty-symbol" aria-hidden="true">۞</div><h2>${title}</h2><p>${description}</p>${action}</div>`;
+}
+function badge(p, day = dateISO()) {
+  const late = p.nextDue < day;
+  const name = late ? `${daysBetween(p.nextDue, day)}d overdue` : phase(p, day);
+  return `<span class="tag ${late ? 'overdue' : phase(p, day) === 'Fresh' ? 'fresh' : p.ease === 'hard' ? 'weak' : ''}">${safe(name)}</span>`;
+}
+function nextLabel(p, day = dateISO()) {
+  if (p.paused) return 'Paused';
+  if (p.nextDue <= day) return p.nextDue === day ? 'Due today' : `Due ${friendly(p.nextDue)}`;
+  return `Next ${friendly(p.nextDue)}`;
+}
+function queueRow(p, i) {
+  return `<button class="passage-row" data-action="review-one" data-id="${safe(p.id)}" aria-label="Review ${safe(passageLabel(p))}"><span class="row-index" aria-hidden="true">${String(i + 1).padStart(2, '0')}</span><span class="passage-info"><span class="passage-title" lang="ar">${safe(passageLabel(p))}</span><span class="passage-sub" style="display:block">${fmt(p.pages)} page${p.pages === 1 ? '' : 's'} · ${phase(p)}${p.note ? ` · ${safe(p.note)}` : ''}</span></span>${badge(p)}<span class="chevron" aria-hidden="true">›</span></button>`;
+}
+function renderToday() {
+  const day = dateISO();
+  const due = dueQueue(state.passages, day);
+  const weak = pendingMistakes(state.mistakes, day);
+  const remaining = activeSessionPassages(state, day);
+  const hasPassages = state.passages.length > 0;
+  const completed = state.passages.filter((p) => p.lastReviewed === day).length;
+  const date = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  return `<div class="today-minimal"><header class="today-heading"><div><p class="eyebrow">${safe(date)}</p><h1>Today's revision</h1></div><button class="mic-button" data-action="voice-mistake" aria-label="Record a mistake">${micIcon}</button></header>
+    ${due.length ? `<section class="today-load" aria-label="Today's review load"><div><strong class="hero-number">${fmt(sumPages(due))}</strong><span class="muted"> pages · ${due.length} passage${due.length === 1 ? '' : 's'}</span></div><button class="primary wide" data-action="start">${remaining.length ? 'Continue revision' : 'Start revision'} <span aria-hidden="true">→</span></button></section><div class="queue">${due.map(queueRow).join('')}</div>` : hasPassages ? `<section class="today-done"><span class="done-mark" aria-hidden="true">✓</span><h2>You're caught up.</h2><p class="muted">${completed ? `${completed} passage${completed === 1 ? '' : 's'} reviewed today.` : 'Nothing scheduled for today.'}</p></section>` : `<section class="today-empty"><p class="muted">Add the passages you have memorized to begin.</p><button class="primary wide" data-action="add-passage">Add your first passage</button></section>`}
+    ${weak.length ? `<section class="today-weak"><div class="section-heading"><h2>Mistakes to revisit <span class="count">${weak.length}</span></h2></div><div class="stack">${weak.map((m) => mistakeCard(m, true)).join('')}</div></section>` : ''}
+    </div>`;
+}
+function renderLibrary() {
+  const filtered = state.passages
+    .filter((p) => libraryFilter === 'all' || (libraryFilter === 'paused' ? p.paused : !p.paused))
+    .sort((a, b) => a.fromS - b.fromS || a.fromA - b.fromA);
+  const overlapping = state.passages.some((p, i, all) =>
+    all.slice(i + 1).some((other) => overlaps(p, other)),
+  );
+  return `${pageHeading('Your memorization', 'Every passage, kept with care.', 'WHAT YOU HAVE LEARNED', '<button class="primary" data-action="add-passage">＋ Add passage</button>')}
+    <div class="library-summary"><div><strong>${fmt(sumPages(state.passages))}</strong><small>page equivalents</small></div><div><strong>${state.passages.length}</strong><small>memorized passages</small></div></div>
+    ${overlapping ? '<div class="notice">Some imported passages overlap. Page totals include both entries; edit their boundaries to avoid counting the same memorization twice.</div>' : ''}
+    <div class="filter-row" aria-label="Filter passages">${[
+      ['all', 'All'],
+      ['active', 'Active'],
+      ['paused', 'Paused'],
+    ]
+      .map(
+        ([id, name]) =>
+          `<button data-action="filter-library" data-id="${id}" class="${libraryFilter === id ? 'active' : ''}" aria-pressed="${libraryFilter === id}">${name}</button>`,
+      )
+      .join('')}</div>
+    ${filtered.length ? `<div class="library-grid stack">${filtered.map((p) => `<article class="library-card"><div class="row between"><div class="passage-title" lang="ar">${safe(passageLabel(p))}</div>${p.paused ? '<span class="tag">Paused</span>' : badge(p)}</div><p class="passage-sub">${fmt(p.pages)} pages · ${nextLabel(p)} · Every ${p.interval} day${p.interval === 1 ? '' : 's'}</p>${p.note ? `<p class="note">${safe(p.note)}</p>` : ''}<div class="card-actions"><button class="secondary" data-action="edit-passage" data-id="${safe(p.id)}">Edit</button><button class="text-button" data-action="pause" data-id="${safe(p.id)}">${p.paused ? 'Resume' : 'Pause'}</button><button class="text-button" data-action="remove-passage" data-id="${safe(p.id)}">Remove</button></div></article>`).join('')}</div>` : empty(state.passages.length ? 'Nothing here yet.' : 'A place for what you know.', state.passages.length ? 'Passages matching this filter will appear here.' : 'Add a quarter-page, a full page, or a passage across surahs. You decide what to memorize.', '<button class="primary" data-action="add-passage">Add memorized passage</button>')}`;
+}
+function mistakeTitle(m) {
+  const passage = state.passages.find((p) => p.id === m.passageId);
+  return passage
+    ? passageLabel(passage)
+    : `${surah(m.surah).name} · ${m.ayah ? `ayah ${m.ayah}` : 'ayah not specified'}`;
+}
+function mistakeCard(m, compact = false) {
+  return `<article class="mistake-card"><div class="row between"><div class="passage-title" lang="ar">${safe(mistakeTitle(m))}</div><span class="tag ${m.resolved ? '' : 'weak'}">${m.resolved ? 'Solid' : 'Practice'}</span></div><p class="passage-sub">${safe(types[m.type] || 'Mistake')} · ${friendly(m.date)}${!m.resolved ? ` · ${m.nextDue <= dateISO() ? 'Due for practice' : `Next ${friendly(m.nextDue)}`}` : ''}</p>${m.said || m.correct ? `<div class="word-correction"><span class="arabic wrong" lang="ar">${safe(m.said)}</span><span aria-hidden="true">→</span><span class="arabic right" lang="ar">${safe(m.correct)}</span></div>` : ''}${m.note ? `<p class="note">${safe(m.note)}</p>` : ''}
+    <div class="card-actions">${m.resolved ? '' : `<button class="secondary" data-action="practice" data-id="${safe(m.id)}" ${m.lastRevisited === dateISO() ? 'disabled' : ''}>${m.lastRevisited === dateISO() ? 'Practiced today' : 'Practiced again'}</button><button class="text-button" data-action="solid" data-id="${safe(m.id)}">Mark solid ✓</button>`}${compact ? '' : `<button class="text-button" data-action="edit-mistake" data-id="${safe(m.id)}">Edit</button><button class="text-button" data-action="remove-mistake" data-id="${safe(m.id)}">Remove</button>`}</div></article>`;
+}
+function renderMistakes() {
+  const list = state.mistakes
+    .filter((m) => mistakeFilter === 'all' || (mistakeFilter === 'solid' ? m.resolved : !m.resolved))
+    .sort((a, b) => Number(a.resolved) - Number(b.resolved) || a.nextDue.localeCompare(b.nextDue));
+  return `<div class="single-column">${pageHeading('Mistake journal', '', 'PRACTICE', '<button class="primary" data-action="add-mistake">＋ Log mistake</button>')}
+    <div class="filter-row" aria-label="Filter mistakes">${[
+      ['practice', 'Needs practice'],
+      ['solid', 'Solid'],
+      ['all', 'All'],
+    ]
+      .map(
+        ([id, name]) =>
+          `<button data-action="filter-mistakes" data-id="${id}" class="${mistakeFilter === id ? 'active' : ''}" aria-pressed="${mistakeFilter === id}">${name}</button>`,
+      )
+      .join(
+        '',
+      )}</div><div class="stack">${list.length ? list.map((m) => mistakeCard(m)).join('') : empty('Space to improve.', 'Log a forgotten ayah, a word, or a point of hesitation. It will return for practice.')}</div></div>`;
+}
+function renderHistory() {
+  const records = state.passages.flatMap((p) => p.reviews.map((r) => ({ ...r, passage: p })));
+  const days = [...new Set(records.map((r) => r.date))].sort().reverse();
+  const week = Array.from({ length: 7 }, (_, i) => addDays(dateISO(), i - 6));
+  const totals = week.map((day) =>
+    records.filter((r) => r.date === day).reduce((n, r) => n + r.passage.pages, 0),
+  );
+  const max = Math.max(...totals, 1);
+  return `<div class="single-column">${pageHeading('Review history', '', 'YOUR REVIEWS')}
+    <div class="section-heading"><h2>The past seven days</h2><span class="small muted">Pages revised</span></div><div class="week-chart" role="img" aria-label="${week.map((day, i) => `${friendly(day)}: ${fmt(totals[i])} pages`).join('; ')}">${week.map((day, i) => `<div class="week-day"><strong>${fmt(totals[i])}</strong><div class="bar-track"><div class="bar" style="height:${Math.max(4, (totals[i] / max) * 60)}px"></div></div>${new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })}</div>`).join('')}</div>
+    <div class="stack">${
+      days.length
+        ? days
+            .map(
+              (day) =>
+                `<section class="history-day"><h2>${day === dateISO() ? 'Today' : friendly(day)}</h2>${records
+                  .filter((r) => r.date === day)
+                  .map(
+                    (r) =>
+                      `<div class="history-row"><div class="passage-info"><div class="passage-title" lang="ar">${safe(passageLabel(r.passage))}</div><p class="passage-sub">${fmt(r.passage.pages)} pages${r.interval ? ` · Next interval: ${r.interval} day${r.interval === 1 ? '' : 's'}` : ''}</p></div><span class="tag ${r.rating === 'hard' ? 'weak' : ''}">${ratingNames[r.rating]}</span></div>`,
+                  )
+                  .join('')}</section>`,
+            )
+            .join('')
+        : empty(
+            'Your practice will show here.',
+            'Complete a review to begin your history. No streak to protect; just a place to return.',
+          )
+    }</div></div>`;
+}
+function renderSession() {
+  const session = state.session,
+    remaining = activeSessionPassages(state),
+    p = remaining[0];
+  if (!session || !p) {
+    const completed = session?.completedIds.length || 0;
+    return `<div class="session-layout"><div class="session-end"><div class="empty-symbol" aria-hidden="true">۞</div><div class="eyebrow">A MOMENT WELL SPENT</div><h1 class="spacer">${completed ? 'Revision, remembered.' : 'Nothing left in this session.'}</h1><p>${completed ? `${completed} passage${completed === 1 ? '' : 's'} completed. Your next review dates are saved.` : 'Your daily plan has the latest passages ready for you.'}</p><a href="#today" class="primary">Back to today →</a></div></div>`;
+  }
+  const completed = session.completedIds.length,
+    total = completed + remaining.length;
+  const draft = session.draft.passageId === p.id ? session.draft.note : '';
+  const weak = state.mistakes.filter(
+    (m) => !m.resolved && (m.passageId === p.id || (m.ayah && inPassage(p, m.surah, m.ayah))),
+  );
+  return `<div class="session-layout"><div class="session-top"><a class="text-button" href="#today">← Pause & return</a><span class="eyebrow">PASSAGE ${completed + 1} OF ${total}</span></div><div class="progress" role="progressbar" aria-label="Session progress" aria-valuenow="${completed}" aria-valuemin="0" aria-valuemax="${total}"><span style="width:${(completed / total) * 100}%"></span></div>
+    <section class="recitation-card">${badge(p)}<h1 class="arabic" lang="ar">${safe(surah(p.fromS).name)}${p.fromS !== p.toS ? ` ← ${safe(surah(p.toS).name)}` : ''}</h1><p class="ayah-range">${p.fromS === p.toS ? `Ayat ${p.fromA}–${p.toA}` : `${p.fromS}:${p.fromA} through ${p.toS}:${p.toA}`} · ${fmt(p.pages)} pages</p>${p.note ? `<p class="note">${safe(p.note)}</p>` : ''}<p class="muted">Recite independently, then check with your Mushaf.<br>Take your time. There is no timer.</p></section>
+    ${weak.length ? `<aside class="session-weak"><strong>Keep an eye on these</strong>${weak.map((m) => `<p>${m.ayah ? `Ayah ${m.ayah} · ` : ''}${safe(m.note || m.correct || types[m.type])}</p>`).join('')}</aside>` : ''}
+    <div class="session-notes"><label for="session-note">Anything to revisit? <span class="muted small">(optional)</span></label><textarea class="input" id="session-note" maxlength="10000" rows="3" placeholder="A hesitation, a forgotten ayah, a word to practise…">${safe(draft)}</textarea><p class="small" id="draft-status">Saved notes become a mistake entry when you finish this passage.</p><div class="session-voice-actions"><button class="secondary" data-action="session-voice">${micIcon} Speak a mistake</button><button class="text-button" data-action="session-mistake">Type a mistake</button></div></div>
+    <div class="rating-heading"><h2>How did you recall it?</h2><p class="lede">Choose a rating to complete this passage.</p></div><div class="ratings">${[
+      ['hard', 'Multiple mistakes or forgotten ayat'],
+      ['good', 'Some hesitation, but remembered'],
+      ['easy', 'No mistakes or hesitation'],
+    ]
+      .map(([rating, description]) => {
+        const interval = reviewInterval(p, rating, dateISO(), state.settings.maxInterval);
+        return `<button class="rating ${rating}" data-action="rate" data-rating="${rating}" data-id="${safe(p.id)}"><strong>${ratingNames[rating]}</strong><span>${description}</span><small>${interval === 1 ? 'Tomorrow' : `In ${interval} days`} · ${friendly(addDays(dateISO(), interval))}</small></button>`;
+      })
+      .join('')}</div></div>`;
+}
+function render() {
+  if (!state) return;
+  const scrollY = window.scrollY;
+  $('#main').innerHTML = (
+    {
+      today: renderToday,
+      library: renderLibrary,
+      mistakes: renderMistakes,
+      history: renderHistory,
+      session: renderSession,
+    }[view] || renderToday
+  )();
+  document.querySelectorAll('[data-view]').forEach((link) => {
+    const selected = link.dataset.view === (view === 'session' ? 'today' : view);
+    if (selected) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+  window.scrollTo(0, scrollY);
+  document.title = `Hifz — ${view === 'session' ? 'Review session' : view === 'library' ? 'Your memorization' : view[0].toUpperCase() + view.slice(1)}`;
+}
+function navigate(target) {
+  if (location.hash === `#${target}`) {
+    view = target;
+    render();
+    window.scrollTo(0, 0);
+  } else location.hash = target;
+}
+function openModal(title, html) {
+  voiceSession?.dispose();
+  voiceSession = null;
+  $('#modal-title').textContent = title;
+  $('#modal-error').hidden = true;
+  $('#modal-body').innerHTML = html;
+  if (!$('#modal').open) $('#modal').showModal();
+}
+function formError(message) {
+  const el = $('#form-error');
+  if (el) {
+    el.textContent = message;
+    el.hidden = false;
+    el.scrollIntoView({ block: 'nearest' });
+  }
+}
+const errorArea = '<p id="form-error" class="form-error" role="alert" hidden></p>';
+function surahOptions(selected) {
+  return SURAHS.map(
+    (s) =>
+      `<option value="${s.id}" ${s.id === Number(selected) ? 'selected' : ''}>${s.id}. ${safe(s.name)}</option>`,
+  ).join('');
+}
+function populateAyahs(select, surahId, preferred = 1, unknown = false) {
+  select.innerHTML =
+    (unknown ? '<option value="0">Not sure / whole passage</option>' : '') +
+    Array.from({ length: surah(surahId).count }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join(
+      '',
+    );
+  select.value = String(Math.max(unknown ? 0 : 1, Math.min(surah(surahId).count, preferred)));
+}
+function passageForm(id) {
+  const original = state.passages.find((p) => p.id === id);
+  const p = original || {
+    fromS: 2,
+    fromA: 1,
+    toS: 2,
+    toA: 5,
+    pages: 0.5,
+    created: dateISO(),
+    interval: 1,
+    note: '',
+  };
+  openModal(
+    original ? 'Edit your passage' : 'Add what you know',
+    `<p class="help">Choose the exact boundaries in your Qalun Mushaf. The ending ayah is included.</p><form id="passage-form">${errorArea}
+    <div class="field"><span>From</span><div class="range-grid"><select id="fromS" class="input" aria-label="Starting surah">${surahOptions(p.fromS)}</select><select id="fromA" class="input" aria-label="Starting ayah"></select></div></div>
+    <div class="field"><span>To (inclusive)</span><div class="range-grid"><select id="toS" class="input" aria-label="Ending surah">${surahOptions(p.toS)}</select><select id="toA" class="input" aria-label="Ending ayah"></select></div></div>
+    <div class="form-row"><div class="field"><label for="pages">Amount on your pages</label><input id="pages" class="input" type="number" inputmode="decimal" min="0.25" max="604" step="0.25" value="${p.pages}" required><small>0.25, 0.5, 1, 1.5… pages</small></div><div class="field"><label for="created">First memorized on</label><input id="created" class="input" type="date" max="${dateISO()}" value="${p.created}" required></div></div>
+    <div class="field"><label for="passage-note">Page number / note <span class="muted">(optional)</span></label><input id="passage-note" class="input" maxlength="10000" value="${safe(p.note)}" placeholder="e.g. page 12, lower half"></div>
+    <details><summary class="small muted">${original ? 'Review interval' : 'Adding established memorization?'}</summary><div class="field spacer"><label for="interval">${original ? 'Current review interval' : 'Starting review interval'}</label><input id="interval" class="input" type="number" min="1" max="3650" step="1" value="${p.interval}" required><small>Days between reviews. Fresh passages rehearse daily during their first week.</small></div></details>
+    <p class="reference-note">${safe(EDITION)}<br>Page amounts come from you. Edition-specific ayah numbering is still being verified.</p><button class="primary wide" type="submit">${original ? 'Save changes' : 'Add to my revision'} →</button></form>`,
+  );
+  populateAyahs($('#fromA'), p.fromS, p.fromA);
+  populateAyahs($('#toA'), p.toS, p.toA);
+  $('#fromS').addEventListener('change', () => {
+    populateAyahs($('#fromA'), Number($('#fromS').value));
+    if (Number($('#toS').value) < Number($('#fromS').value)) {
+      $('#toS').value = $('#fromS').value;
+      populateAyahs($('#toA'), Number($('#toS').value));
+    }
+  });
+  $('#toS').addEventListener('change', () => populateAyahs($('#toA'), Number($('#toS').value)));
+  $('#passage-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const values = {
+      id: original?.id || uid(),
+      fromS: Number($('#fromS').value),
+      fromA: Number($('#fromA').value),
+      toS: Number($('#toS').value),
+      toA: Number($('#toA').value),
+      pages: Number($('#pages').value),
+      created: $('#created').value,
+      interval: Number($('#interval').value),
+      note: $('#passage-note').value.trim(),
+    };
+    try {
+      validatePassage({ ...values, nextDue: dateISO() });
+      if (values.created > dateISO()) throw new Error('Choose today or an earlier memorization date.');
+      if (state.passages.some((other) => other.id !== values.id && overlaps(values, other)))
+        throw new Error('This overlaps a saved passage. Edit that passage or choose a separate range.');
+    } catch (reason) {
+      formError(reason.message);
+      return;
+    }
+    busy = true;
+    const button = event.submitter;
+    button.disabled = true;
+    const saved = await change((next) => {
+      if (original) {
+        const index = next.passages.findIndex((item) => item.id === original.id);
+        const previous = next.passages[index];
+        next.passages[index] = {
+          ...previous,
+          ...values,
+          nextDue:
+            previous.interval !== values.interval
+              ? previous.lastReviewed
+                ? addDays(previous.lastReviewed, values.interval)
+                : dateISO()
+              : previous.nextDue,
+        };
+      } else next.passages.push({ ...values, nextDue: dateISO(), reviews: [], hardCount: 0, paused: false });
+    });
+    busy = false;
+    button.disabled = false;
+    if (saved) {
+      $('#modal').close();
+      navigate('library');
+      toast(original ? 'Passage updated.' : 'Added to your revision plan.');
+    }
+  });
+}
+function voicePanel() {
+  return `<section class="voice-panel" aria-label="Voice mistake logging"><button id="voice-record" class="voice-record" type="button" ${voiceKey ? '' : 'disabled'}>${micIcon}<span>Speak a mistake</span></button><p id="voice-status" class="small muted" role="status">${voiceKey ? 'Speak in Arabic or English. Gemini drafts; you check and save.' : 'Connect Gemini once to use the microphone.'}</p><div id="voice-key-setup" ${voiceKey ? 'hidden' : ''}><label class="field spacer"><span>Gemini API key</span><input id="voice-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Hifz key"></label><button class="secondary" type="button" id="voice-key-save">Save key on this device</button></div><div class="voice-tools"><label class="text-button" for="voice-file">Choose audio instead</label><input type="file" id="voice-file" accept="audio/*,.webm" hidden><button class="text-button" type="button" id="voice-cancel" hidden>Cancel</button><button class="text-button" type="button" id="voice-retry" hidden>Retry transcription</button></div><details id="voice-preview" hidden><summary class="small muted">Recording & transcript</summary><audio id="voice-playback" controls preload="metadata"></audio><p id="voice-transcript" class="note" dir="auto"></p><a id="voice-download" class="text-button" download="hifz-mistake.webm">Keep recording</a></details><p id="voice-draft-count" class="small" hidden></p></section>`;
+}
+function attachVoice(passage) {
+  let alive = true,
+    mode = 'ready',
+    recorder,
+    recording,
+    audioURL,
+    request,
+    limit,
+    operation = 0,
+    queue = [],
+    total = 0;
+  const root = $('#modal-body');
+  const status = $('#voice-status'),
+    recordButton = $('#voice-record');
+  const local = (selector) => $(selector, root);
+  function setMode(next, message) {
+    mode = next;
+    if (!alive) return;
+    status.textContent = message;
+    recordButton.disabled = !voiceKey || next === 'requesting' || next === 'processing';
+    recordButton.classList.toggle('recording', next === 'recording');
+    $('span', recordButton).textContent =
+      next === 'recording'
+        ? 'Stop & transcribe'
+        : next === 'processing'
+          ? 'Transcribing…'
+          : 'Speak a mistake';
+    local('#voice-cancel').hidden = !['recording', 'processing', 'requesting'].includes(next);
+    local('#voice-retry').hidden = !recording || next !== 'ready';
+    local('#voice-file').disabled = next !== 'ready';
+    local('#mistake-form')
+      .querySelectorAll('input, select, textarea, button')
+      .forEach((field) => {
+        field.disabled = next !== 'ready';
+      });
+  }
+  function applyDraft(draft) {
+    local('#msurah').value = String(draft.surah);
+    populateAyahs(local('#mayah'), draft.surah, draft.ayah, true);
+    local('#mtype').value = draft.type;
+    local('#mistake-note').value = draft.note;
+    local('#msaid').value = draft.said;
+    local('#mcorrect').value = draft.correct;
+    if (draft.said || draft.correct) local('#msaid').closest('details').open = true;
+    local('#voice-draft-count').hidden = false;
+    local('#voice-draft-count').textContent =
+      `${total - queue.length} of ${total} · ${draft.needsReferenceCheck ? 'Select/check the surah and ayah against your Mushaf.' : 'Check the reference and correction before saving.'}`;
+  }
+  async function processAudio(blob) {
+    if (!alive) return;
+    const currentOperation = ++operation;
+    recording = blob;
+    if (audioURL) URL.revokeObjectURL(audioURL);
+    audioURL = URL.createObjectURL(blob);
+    local('#voice-playback').src = audioURL;
+    local('#voice-download').href = audioURL;
+    local('#voice-download').download =
+      `hifz-mistake.${blob.type.includes('mp4') ? 'm4a' : blob.type.includes('wav') ? 'wav' : blob.type.includes('mpeg') ? 'mp3' : 'webm'}`;
+    local('#voice-preview').hidden = false;
+    request = new AbortController();
+    const currentRequest = request;
+    const timeout = setTimeout(() => currentRequest.abort(), 60000);
+    setMode('processing', 'Gemini is drafting your mistake…');
+    try {
+      const draft = await transcribeMistakes(blob, {
+        apiKey: voiceKey,
+        surah: Number(local('#msurah').value),
+        passage,
+        signal: currentRequest.signal,
+      });
+      if (!alive || currentOperation !== operation) return;
+      local('#voice-transcript').textContent = draft.transcript;
+      queue = [...draft.mistakes];
+      total = queue.length;
+      if (!queue.length) {
+        setMode('ready', 'No clear mistake was found. You can replay the recording or type a note.');
+        return;
+      }
+      const first = queue.shift();
+      applyDraft(first);
+      setMode('ready', 'Draft ready. Check it, then save.');
+    } catch (reason) {
+      if (alive && currentOperation === operation)
+        setMode(
+          'ready',
+          reason.name === 'AbortError'
+            ? 'Transcription stopped. Your recording is still here; retry when ready.'
+            : reason.message,
+        );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  async function stopAndProcess() {
+    if (mode !== 'recording') return;
+    clearTimeout(limit);
+    setMode('processing', 'Preparing your recording…');
+    const currentOperation = operation;
+    const currentRecorder = recorder;
+    try {
+      const blob = await currentRecorder.stop();
+      if (alive && currentOperation === operation) await processAudio(blob);
+    } catch {
+      if (alive && currentOperation === operation)
+        setMode('ready', 'Could not finish this recording. Please try again.');
+    }
+  }
+  async function start() {
+    if (!voiceKey || mode !== 'ready') return;
+    if (queue.length) {
+      status.textContent = 'Save the remaining drafts before recording another note.';
+      return;
+    }
+    if (!navigator.onLine) {
+      status.textContent = 'Voice transcription needs internet. You can type your mistake below.';
+      return;
+    }
+    const currentOperation = ++operation;
+    const currentRecorder = new VoiceRecorder();
+    recorder = currentRecorder;
+    setMode('requesting', 'Allow microphone access to speak.');
+    try {
+      await currentRecorder.start();
+      if (!alive || currentOperation !== operation || currentRecorder.cancelled) return;
+      setMode('recording', 'Listening… Describe the mistake, then tap Stop.');
+      limit = setTimeout(stopAndProcess, 120000);
+    } catch (reason) {
+      if (alive && currentOperation === operation)
+        setMode(
+          'ready',
+          reason.name === 'NotAllowedError'
+            ? 'Microphone permission was denied. Allow it in Chrome, choose audio, or type below.'
+            : reason.name === 'AbortError'
+              ? 'Recording cancelled.'
+              : reason.message,
+        );
+    }
+  }
+  recordButton.onclick = () => (mode === 'recording' ? stopAndProcess() : start());
+  local('#voice-file').onchange = (event) => {
+    const file = event.target.files[0];
+    if (!file || mode !== 'ready') return;
+    if (!voiceKey) {
+      status.textContent = 'Connect your Gemini key first.';
+      return;
+    }
+    if (queue.length) {
+      status.textContent = 'Save the remaining drafts before choosing another recording.';
+      return;
+    }
+    processAudio(file);
+  };
+  local('#voice-retry').onclick = () => recording && processAudio(recording);
+  local('#voice-cancel').onclick = () => {
+    operation++;
+    clearTimeout(limit);
+    recorder?.cancel();
+    request?.abort();
+    setMode('ready', 'Stopped. You can record again or type a note.');
+  };
+  local('#voice-key-save').onclick = async (event) => {
+    const key = local('#voice-key').value.trim();
+    if (key.length < 20 || key.length > 500 || /\s/.test(key)) {
+      status.textContent = 'Paste a valid Gemini API key.';
+      return;
+    }
+    event.target.disabled = true;
+    try {
+      await storage.setVoiceKey(key);
+      voiceKey = key;
+      local('#voice-key').value = '';
+      local('#voice-key-setup').hidden = true;
+      setMode('ready', 'Gemini connected. Tap the microphone to speak.');
+    } catch (reason) {
+      status.textContent = reason.message;
+    } finally {
+      event.target.disabled = false;
+    }
+  };
+  const controller = {
+    start,
+    get busy() {
+      return mode !== 'ready';
+    },
+    nextDraft() {
+      if (!queue.length) return false;
+      applyDraft(queue.shift());
+      return true;
+    },
+    dispose() {
+      operation++;
+      alive = false;
+      clearTimeout(limit);
+      recorder?.cancel();
+      request?.abort();
+      if (audioURL) URL.revokeObjectURL(audioURL);
+    },
+  };
+  voiceSession = controller;
+  return controller;
+}
+function mistakeForm(id, passage = null) {
+  const original = state.mistakes.find((m) => m.id === id);
+  const m = original || {
+    surah: passage?.fromS || 2,
+    ayah: 0,
+    type: 'recall',
+    note: '',
+    said: '',
+    correct: '',
+    date: dateISO(),
+    passageId: passage?.id,
+  };
+  openModal(
+    original ? 'Edit mistake' : 'A note for next time',
+    `<p class="help">${passage ? `During ${safe(passageLabel(passage))}. ` : ''}Describe your mistake, then check the draft before saving.</p>${original ? '' : voicePanel()}<form id="mistake-form">${errorArea}<div class="field"><label for="mistake-note">What needs practice?</label><textarea id="mistake-note" class="input" maxlength="10000" rows="3" placeholder="Where did you hesitate or get stuck?">${safe(m.note)}</textarea></div><div class="range-grid"><div class="field"><label for="msurah">Surah</label><select id="msurah" class="input">${surahOptions(m.surah)}</select></div><div class="field"><label for="mayah">Ayah</label><select id="mayah" class="input"></select></div></div><div class="form-row"><div class="field"><label for="mtype">Mistake type</label><select id="mtype" class="input">${Object.entries(
+      types,
+    )
+      .map(
+        ([value, name]) => `<option value="${value}" ${m.type === value ? 'selected' : ''}>${name}</option>`,
+      )
+      .join(
+        '',
+      )}</select></div><div class="field"><label for="mdate">Date</label><input type="date" id="mdate" class="input" max="${dateISO()}" value="${m.date}" required></div></div><details ${m.said || m.correct ? 'open' : ''}><summary class="small muted">Add words / correction (optional)</summary><div class="form-row spacer"><div class="field"><label for="msaid">What I said</label><textarea id="msaid" class="input arabic" lang="ar" dir="rtl" maxlength="10000">${safe(m.said)}</textarea></div><div class="field"><label for="mcorrect">Correct words</label><textarea id="mcorrect" class="input arabic" lang="ar" dir="rtl" maxlength="10000">${safe(m.correct)}</textarea></div></div></details><button type="submit" class="primary wide spacer">Save mistake →</button></form>`,
+  );
+  populateAyahs($('#mayah'), m.surah, m.ayah, true);
+  const voice = original ? null : attachVoice(passage);
+  $('#msurah').addEventListener('change', () =>
+    populateAyahs($('#mayah'), Number($('#msurah').value), 0, true),
+  );
+  $('#mistake-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    if (voice?.busy) {
+      formError('Stop recording and wait for the draft before saving.');
+      return;
+    }
+    const values = {
+      surah: Number($('#msurah').value),
+      ayah: Number($('#mayah').value),
+      type: $('#mtype').value,
+      date: $('#mdate').value,
+      note: $('#mistake-note').value.trim(),
+      said: $('#msaid').value.trim(),
+      correct: $('#mcorrect').value.trim(),
+    };
+    if (!values.note && !values.said && !values.correct) {
+      formError('Add a note or a correction before saving.');
+      return;
+    }
+    if (values.date > dateISO()) {
+      formError('Choose today or an earlier date.');
+      return;
+    }
+    if (
+      passage &&
+      (values.surah < passage.fromS ||
+        values.surah > passage.toS ||
+        (values.ayah && !inPassage(passage, values.surah, values.ayah)))
+    ) {
+      formError('Choose an ayah within this passage, or log this mistake from the journal.');
+      return;
+    }
+    busy = true;
+    event.submitter.disabled = true;
+    const saved = await change((next) => {
+      if (original)
+        Object.assign(
+          next.mistakes.find((item) => item.id === original.id),
+          values,
+        );
+      else
+        next.mistakes.push({
+          ...values,
+          id: uid(),
+          passageId: passage?.id,
+          revisits: 0,
+          resolved: false,
+          nextDue: addDays(values.date, 1),
+        });
+    });
+    busy = false;
+    event.submitter.disabled = false;
+    if (saved) {
+      if (voice?.nextDraft()) {
+        toast('Saved. Check the next mistake.');
+        return;
+      }
+      $('#modal').close();
+      toast('Mistake saved for practice.');
+    }
+  });
+  return voice;
+}
+function download(text, filename) {
+  const link = document.createElement('a'),
+    url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+function referenceModal() {
+  openModal(
+    'Your Quran references',
+    `<div class="settings-section"><div class="arabic" lang="ar">قالون عن نافع</div><p class="arabic" lang="ar">${safe(EDITION)}</p><hr class="divider"><p>The current reference contains 114 surahs and 6,214 ayat, sourced from the <a href="https://quranpedia.app/quran/qaloon/index.html" target="_blank" rel="noopener">Quranpedia Qalun index</a>.</p><p class="spacer">Its counts and numbering have not yet been verified against your seventh edition. Check references in your printed Mushaf.</p><p class="spacer">Choose exact start and end ayat and enter the physical page amount yourself. Passages may cross surahs. Hifz does not infer page boundaries or use a Hafs page map.</p></div>`,
+  );
+}
+function settingsModal() {
+  openModal(
+    'Make it yours',
+    `<div class="settings-section"><h3>Your Mushaf</h3><p class="arabic" lang="ar">${safe(EDITION)}</p><button class="text-button" data-action="reference">Reference details →</button></div><hr class="divider"><form id="settings-form">${errorArea}<div class="field"><label for="max-interval">Longest review interval</label><select id="max-interval" class="input">${[7, 14, 21, 30, 45, 60].map((n) => `<option value="${n}" ${state.settings.maxInterval === n ? 'selected' : ''}>${n} days</option>`).join('')}</select><small>Applies to future interval growth. Fresh passages rehearse daily; Difficult returns tomorrow. Existing longer intervals are preserved until a difficult review.</small></div><button class="secondary wide" type="submit">Save preference</button></form><hr class="divider"><section class="settings-section"><h3>A copy for safekeeping</h3><p>Your reviews stay on this device. Export a backup for a new phone or before clearing browser data.</p><div class="row"><button class="secondary" data-action="export">↓ Export backup</button><button class="secondary" data-action="import">↑ Restore backup</button></div><input id="backup-file" type="file" accept=".json,application/json" hidden><button class="text-button" data-action="restore-point">Download data from before the last restore</button><div class="row"><button class="text-button" data-action="persist">Protect device storage →</button></div><p id="persistence-status" role="status"></p></section><hr class="divider"><section class="settings-section"><h3>Keep Hifz close</h3>${installPrompt ? '<button class="secondary" data-action="install">Install Hifz</button>' : ''}<p class="install-tip">On your Samsung: open the hosted Hifz page in Chrome, then use ⋮ → Add to Home screen → Install. After the app is ready offline, your revision works without internet.</p><p class="install-tip" id="offline-status">Checking offline availability…</p></section><hr class="divider"><p class="small muted">Hifz 2 · Quiet, local, and at your pace.</p>`,
+  );
+  $('#modal-body').insertAdjacentHTML(
+    'afterbegin',
+    `<section class="settings-section"><h3>Voice mistakes</h3><p id="gemini-status" role="status">${voiceKey ? 'Gemini connected on this device.' : 'Connect your dedicated Hifz Gemini key.'}</p><form id="voice-settings-form"><label class="field spacer"><span>Gemini API key</span><input id="gemini-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="${voiceKey ? 'Paste a replacement key' : 'Paste your Hifz key'}"></label><div class="row"><button class="secondary" type="submit">Save Gemini key</button>${voiceKey ? '<button class="text-button" type="button" id="forget-gemini-key">Disconnect</button>' : ''}</div></form><p class="small muted spacer">Saved only on this device, outside backups. Voice clips go to Google for transcription when you use the microphone. <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener">Manage keys</a></p></section><hr class="divider"><button class="text-button" data-action="history">Review history →</button><hr class="divider">`,
+  );
+  $('#voice-settings-form').onsubmit = async (event) => {
+    event.preventDefault();
+    const key = $('#gemini-key').value.trim();
+    if (key.length < 20 || key.length > 500 || /\s/.test(key)) {
+      $('#gemini-status').textContent = 'Paste a valid Gemini API key.';
+      return;
+    }
+    event.submitter.disabled = true;
+    try {
+      await storage.setVoiceKey(key);
+      voiceKey = key;
+      $('#gemini-key').value = '';
+      $('#gemini-status').textContent = 'Gemini connected on this device.';
+    } catch (reason) {
+      $('#gemini-status').textContent = reason.message;
+    } finally {
+      event.submitter.disabled = false;
+    }
+  };
+  if ($('#forget-gemini-key'))
+    $('#forget-gemini-key').onclick = async () => {
+      await storage.setVoiceKey('');
+      voiceKey = '';
+      settingsModal();
+    };
+  $('#settings-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const maxInterval = Number($('#max-interval').value);
+    if (
+      await change((next) => {
+        next.settings.maxInterval = maxInterval;
+      })
+    ) {
+      $('#modal').close();
+      toast('Preference saved.');
+    }
+  });
+  $('#backup-file').addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      if (file.size > 20 * 1024 * 1024) throw new Error('Choose a backup smaller than 20 MB.');
+      const imported = parseBackup(await file.text());
+      openModal(
+        'Restore this backup?',
+        `<p class="help">This backup has <strong>${imported.passages.length} passages</strong> and <strong>${imported.mistakes.length} mistakes</strong>. It will replace your current library, history, and session.</p><p class="help">A recovery copy of your current data will be kept on this device.</p><div class="form-buttons"><button class="secondary" id="cancel-restore">Cancel</button><button class="primary" id="confirm-restore">Restore backup</button></div>`,
+      );
+      $('#cancel-restore').onclick = settingsModal;
+      $('#confirm-restore').onclick = async (event) => {
+        event.target.disabled = true;
+        const saved = await change(
+          (next) => {
+            const revision = next.revision;
+            Object.keys(next).forEach((key) => delete next[key]);
+            Object.assign(next, imported, { revision });
+          },
+          { restore: true },
+        );
+        if (saved) {
+          $('#modal').close();
+          navigate('today');
+          toast('Backup restored.');
+        } else event.target.disabled = false;
+      };
+    } catch (reason) {
+      formError(reason.message);
+      event.target.value = '';
+    }
+  });
+  navigator.storage?.persisted?.().then((granted) => {
+    if ($('#persistence-status'))
+      $('#persistence-status').textContent = granted
+        ? 'Storage protection is enabled. Keep a backup too.'
+        : 'Storage protection can help prevent automatic browser cleanup.';
+  });
+  if ('serviceWorker' in navigator)
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if ($('#offline-status'))
+        $('#offline-status').textContent = reg?.active
+          ? 'App files are saved for offline use.'
+          : 'Offline files are not ready yet. Keep Hifz open while connected.';
+    });
+}
+async function startSession(id) {
+  if (busy) return;
+  if (activeSessionPassages(state).length && !id) {
+    navigate('session');
+    return;
+  }
+  if (activeSessionPassages(state).length && id && !activeSessionPassages(state).some((p) => p.id === id)) {
+    toast('Finish or continue your current session first.');
+    navigate('session');
+    return;
+  }
+  const saved = await change((next) => {
+    const queue = dueQueue(next.passages);
+    if (next.session && activeSessionPassages(next).length) {
+      if (id) {
+        const remainingIds = activeSessionPassages(next).map((p) => p.id);
+        // Do not move away from a passage with a saved draft.
+        if (next.session.draft.note && next.session.draft.passageId !== id)
+          throw new Error('Finish the passage with your saved note before switching.');
+        next.session.ids = [...next.session.completedIds, id, ...remainingIds.filter((item) => item !== id)];
+      }
+    } else
+      next.session = {
+        ids: id ? [id] : queue.map((p) => p.id),
+        completedIds: [],
+        startedAt: dateISO(),
+        draft: { passageId: '', note: '' },
+      };
+  });
+  if (saved) navigate('session');
+}
+async function completePassage(id, rating) {
+  const note = $('#session-note')?.value.trim() || '';
+  const saved = await change((next) => {
+    const index = next.passages.findIndex((p) => p.id === id),
+      p = next.passages[index];
+    if (!p || p.paused || p.nextDue > dateISO()) throw new Error('This passage is no longer due.');
+    next.passages[index] = ratePassage(p, rating, dateISO(), next.settings.maxInterval);
+    if (note)
+      next.mistakes.push({
+        id: uid(),
+        passageId: p.id,
+        surah: p.fromS,
+        ayah: 0,
+        note,
+        said: '',
+        correct: '',
+        type: 'recall',
+        date: dateISO(),
+        nextDue: addDays(dateISO(), 1),
+        resolved: false,
+        revisits: 0,
+      });
+    if (next.session && !next.session.completedIds.includes(id)) next.session.completedIds.push(id);
+    if (next.session) next.session.draft = { passageId: '', note: '' };
+  });
+  if (saved) {
+    window.scrollTo(0, 0);
+    $('#main').focus({ preventScroll: true });
+    toast('Review saved.');
+  }
+}
+function confirmRemoval(kind, id) {
+  openModal(
+    kind === 'passage' ? 'Remove this passage?' : 'Remove this mistake?',
+    `<p class="help">${kind === 'passage' ? 'This removes the passage and its review history. Export a backup first if you want to keep a copy.' : 'This mistake entry will be removed from your journal.'}</p><div class="form-buttons"><button class="secondary" data-action="close">Keep it</button><button class="danger" id="confirm-remove">Remove</button></div>`,
+  );
+  $('#confirm-remove').onclick = async (event) => {
+    event.target.disabled = true;
+    const saved = await change((next) => {
+      if (kind === 'passage') next.passages = next.passages.filter((p) => p.id !== id);
+      else next.mistakes = next.mistakes.filter((m) => m.id !== id);
+    });
+    if (saved) {
+      $('#modal').close();
+      toast('Removed.');
+    } else event.target.disabled = false;
+  };
+}
+async function action(button) {
+  const { action: name, id } = button.dataset;
+  if (name === 'reload') {
+    await saveQueue;
+    location.reload();
+    return;
+  }
+  if (!state) return;
+  if (name === 'close') return $('#modal').close();
+  if (name === 'add-passage' || name === 'edit-passage') return passageForm(id);
+  if (name === 'go-library') return navigate('library');
+  if (name === 'filter-library') {
+    libraryFilter = id;
+    return render();
+  }
+  if (name === 'filter-mistakes') {
+    mistakeFilter = id;
+    return render();
+  }
+  if (name === 'add-mistake' || name === 'edit-mistake') return mistakeForm(id);
+  if (name === 'voice-mistake' || name === 'session-voice') {
+    const voice = mistakeForm(null, name === 'session-voice' ? activeSessionPassages(state)[0] : null);
+    if (voiceKey) await voice.start();
+    return;
+  }
+  if (name === 'history') {
+    $('#modal').close();
+    navigate('history');
+    return;
+  }
+  if (name === 'session-mistake') return mistakeForm(null, activeSessionPassages(state)[0]);
+  if (name === 'reference') return referenceModal();
+  if (name === 'start') return startSession();
+  if (name === 'review-one') return startSession(id);
+  if (name === 'remove-passage' || name === 'remove-mistake')
+    return confirmRemoval(name === 'remove-passage' ? 'passage' : 'mistake', id);
+  if (name === 'export') {
+    await saveQueue;
+    return download(backupOf(state), `hifz-qalun-${dateISO()}.json`);
+  }
+  if (name === 'import') return $('#backup-file').click();
+  if (name === 'restore-point') {
+    const previous = await storage.read('beforeRestore');
+    return previous
+      ? download(backupOf(previous), `hifz-before-restore-${dateISO()}.json`)
+      : toast('No previous restore to recover yet.');
+  }
+  if (name === 'persist') {
+    const granted = await navigator.storage?.persist?.();
+    $('#persistence-status').textContent = granted
+      ? 'Storage protection is enabled. Keep a backup too.'
+      : 'Chrome has not granted protection yet. Install Hifz and keep regular backups.';
+    return;
+  }
+  if (name === 'install') {
+    await installPrompt?.prompt();
+    installPrompt = null;
+    return;
+  }
+  if (name === 'update' || name === 'reload-updated') {
+    if (pending || $('#modal').open || view === 'session')
+      return toast('Finish or pause your review and close any form before updating.');
+    if (name === 'reload-updated') location.reload();
+    else registration?.waiting?.postMessage('ACTIVATE');
+    return;
+  }
+  if (busy) return;
+  busy = true;
+  button.disabled = true;
+  try {
+    if (name === 'rate') await completePassage(id, button.dataset.rating);
+    if (name === 'pause')
+      await change((next) => {
+        const p = next.passages.find((p) => p.id === id);
+        p.paused = !p.paused;
+      });
+    if (name === 'solid')
+      await change((next) => {
+        const m = next.mistakes.find((m) => m.id === id);
+        m.resolved = true;
+        m.lastRevisited = dateISO();
+      });
+    if (name === 'practice')
+      await change((next) => {
+        const m = next.mistakes.find((m) => m.id === id);
+        if (m.lastRevisited === dateISO()) return;
+        m.lastRevisited = dateISO();
+        m.revisits++;
+        m.nextDue = addDays(dateISO(), Math.min(14, 2 ** Math.min(m.revisits, 4)));
+      });
+  } finally {
+    busy = false;
+    button.disabled = false;
+  }
+}
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action]');
+  if (button) action(button).catch((reason) => error(reason.message));
+});
+document.addEventListener('input', (event) => {
+  if (event.target.id !== 'session-note') return;
+  const p = activeSessionPassages(state)[0];
+  if (!p) return;
+  const note = event.target.value;
+  $('#draft-status').textContent = 'Saving note…';
+  const sequence = (document.noteSequence || 0) + 1;
+  document.noteSequence = sequence;
+  change(
+    (next) => {
+      if (next.session) next.session.draft = { passageId: p.id, note };
+    },
+    { renderAfter: false },
+  ).then((saved) => {
+    if ($('#draft-status') && document.noteSequence === sequence)
+      $('#draft-status').textContent = saved
+        ? 'Note saved on this device. It joins your journal when you finish.'
+        : 'Note not saved. Keep this window open and try again.';
+  });
+});
+$('#settings-open').onclick = () => state && settingsModal();
+$('#modal-close').onclick = () => $('#modal').close();
+$('#modal').addEventListener('close', () => {
+  voiceSession?.dispose();
+  voiceSession = null;
+});
+$('#modal').addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab') return;
+  const focusable = [
+    ...$('#modal').querySelectorAll(
+      'button, a[href], input:not([type="hidden"]), select, textarea, summary, [tabindex]',
+    ),
+  ].filter((element) => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length);
+  const first = focusable[0],
+    last = focusable.at(-1);
+  if (!first) {
+    event.preventDefault();
+    return;
+  }
+  if (event.shiftKey && (document.activeElement === first || !$('#modal').contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+$('#modal').addEventListener('click', (event) => {
+  if (event.target === $('#modal')) {
+    const r = $('#modal').getBoundingClientRect();
+    if (
+      event.clientX < r.left ||
+      event.clientX > r.right ||
+      event.clientY < r.top ||
+      event.clientY > r.bottom
+    )
+      $('#modal').close();
+  }
+});
+window.addEventListener('hashchange', async () => {
+  await saveQueue;
+  view = ['today', 'library', 'mistakes', 'history', 'session'].includes(location.hash.slice(1))
+    ? location.hash.slice(1)
+    : 'today';
+  render();
+  window.scrollTo(0, 0);
+  $('#main').focus({ preventScroll: true });
+});
+window.addEventListener('beforeunload', (event) => {
+  if (pending) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  installPrompt = event;
+});
+channel?.addEventListener('message', (event) => {
+  if (state && event.data.revision > state.revision)
+    error('Your library changed in another Hifz window. Reload to continue with the latest data.');
+});
+function checkDay() {
+  if (state && lastDay !== dateISO() && !$('#modal').open && !pending) {
+    lastDay = dateISO();
+    render();
+  }
+}
+window.addEventListener('focus', checkDay);
+document.addEventListener('visibilitychange', checkDay);
+setInterval(checkDay, 30000);
+async function registerOffline() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    let hasControlledPage = Boolean(navigator.serviceWorker.controller);
+    registration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+    hasControlledPage ||= Boolean(navigator.serviceWorker.controller);
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hasControlledPage) {
+        hasControlledPage = true;
+        return;
+      }
+      if (refreshing) return;
+      if (pending || $('#modal').open || view === 'session') {
+        $('#notice').hidden = false;
+        $('#notice').innerHTML =
+          'Hifz was updated in another window. Continue your review, then reload. <button data-action="reload-updated">Reload when ready</button>';
+      } else {
+        refreshing = true;
+        location.reload();
+      }
+    });
+    function announceUpdate() {
+      if (registration.waiting && navigator.serviceWorker.controller) {
+        $('#notice').hidden = false;
+        $('#notice').innerHTML =
+          'A fresh version of Hifz is ready. <button data-action="update">Update when ready</button>';
+      }
+    }
+    announceUpdate();
+    registration.addEventListener('updatefound', () => {
+      registration.installing?.addEventListener('statechange', announceUpdate);
+    });
+  } catch {
+    $('#notice').hidden = false;
+    $('#notice').textContent =
+      'Offline files could not be prepared. Keep an internet connection and reopen Hifz to try again.';
+  }
+}
+async function boot() {
+  try {
+    storage = await openStorage();
+    state = await storage.load();
+    const savedKey = await storage.read('voiceKey');
+    voiceKey = typeof savedKey === 'string' ? savedKey : '';
+    view = ['today', 'library', 'mistakes', 'history', 'session'].includes(location.hash.slice(1))
+      ? location.hash.slice(1)
+      : 'today';
+    render();
+    await registerOffline();
+  } catch (reason) {
+    $('#main').innerHTML =
+      `<div class="single-column">${pageHeading('Let’s recover your library.', 'Your saved data has not been replaced.', 'DEVICE STORAGE')}<div class="notice error">${safe(reason.message)}</div><p class="help">Keep a copy of the stored data, then restore a valid Hifz backup or try reopening Chrome.</p><div class="row wrap"><button class="secondary" id="raw-export">Download stored data</button><label class="secondary" for="recovery-file">Restore backup</label><input type="file" id="recovery-file" accept=".json,application/json" hidden><button class="secondary" data-action="reload">Try again</button></div><p id="recovery-error" class="help spacer" role="alert"></p></div>`;
+    $('#raw-export').onclick = async () => {
+      let raw;
+      try {
+        raw = await storage?.read();
+      } catch {}
+      download(
+        raw ? JSON.stringify(raw, null, 2) : localStorage.getItem(LEGACY_KEY) || '{}',
+        'hifz-recovery-data.json',
+      );
+    };
+    $('#recovery-file').onchange = async (event) => {
+      try {
+        const file = event.target.files[0];
+        if (!file) return;
+        if (file.size > 20 * 1024 * 1024) throw new Error('Choose a backup smaller than 20 MB.');
+        const imported = parseBackup(await file.text());
+        if (!storage) storage = await openStorage();
+        const old = await storage.read();
+        imported.revision = old?.revision || 0;
+        state = await storage.write(imported, { expectedRevision: imported.revision, restore: true });
+        location.hash = 'today';
+        location.reload();
+      } catch (e) {
+        $('#recovery-error').textContent = e.message;
+      }
+    };
+  }
+}
+boot();

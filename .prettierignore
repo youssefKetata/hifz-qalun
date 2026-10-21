@@ -1,0 +1,8 @@
+node_modules
+test-results
+playwright-report
+.local
+.github
+package-lock.json
+surahs-qalun.json
+docs/platform-evaluation.md

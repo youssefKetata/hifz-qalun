@@ -1,56 +1,104 @@
-# Hifz — Qalun Review (MVP)
+# Hifz — Qalun Review
 
-An Android-installable, local-first Progressive Web App for memorization revision according to **قالون عن نافع**, using **العدّ المدني الأخير** for surah/ayah counts. No login or database server.
+A mobile-first, installable PWA for daily Quran memorization revision. **قالون عن نافع**. Core reviews, manual mistakes, and scheduling work offline after the app files are cached. Optional voice mistakes use your own Gemini API key and an internet connection. No backend or runtime dependency is required.
 
-## What's included
+## Daily use
 
-- 114 surahs, exact Qalun counts: 6,214 ayat (metadata only, no full Quran text)
-- Add what you have memorized using a **start surah/ayah → end surah/ayah** range (even across surahs)
-- Assign your physical amount as **0.25, 0.5, 1, 1.5, ... pages**; note your Mushaf's page number if helpful
-- Daily schedule, automatic overdue carryover and Easy / Good / Difficult ratings
-- Fresh passages reviewed daily for 7 days; then Easy makes the interval grow; Good grows more slowly; Difficult resets to next day; adjustable initial intervals and start date
-- Mistake logging: type manually or record audio; Gemini returns *proposed* fields for you to verify before saving
-- Yesterday's and due mistakes shown on the Today screen; repeated correction practice with "Reviewed again" and "Mark solid"
-- LocalStorage on-device; export/import JSON backups; PWA caches app files for offline use
+1. Add a passage using inclusive start/end surah and ayah references. Ranges can cross surahs.
+2. Enter its physical length in quarter-page increments (`0.25`, `0.5`, `1`, `1.5`, …), when you first memorized it, and an optional page label.
+3. Open **Today**, then **Start revision**. Recite independently and check your printed Mushaf.
+4. Log a quick note or an exact mistake. Choose **Difficult**, **Good**, or **Easy** to complete the passage; each button previews the next review date.
+5. Pause and return anytime. Your session, completed passages, and saved draft note survive reopening. Wait for “Note saved” before closing.
+6. Revisit the mistake journal and export a backup periodically from Settings.
 
-## Getting the app onto an Android phone
+Today shows only the due page amount, start/continue action, due passages, the microphone, and mistakes due for practice. With no work due, it shows a short caught-up state. Navigation contains Today, Memorization, and Mistakes; review history is available in Settings. New memorization is always chosen by you. Overlapping new ranges are rejected; overlapping legacy entries are retained and flagged for correction. Page totals are user-entered equivalents, not an inferred page map.
 
-1. Upload **all files in this folder** (not just `index.html`) to an HTTPS static website, e.g. **GitHub Pages** (a public repository is fine because *the files contain no API key*), Cloudflare Pages, or Netlify.
-2. Open the hosted URL in **Chrome on Android**.
-3. Chrome menu ⋮ → **Add to Home screen** → **Install** (wording varies).
-4. Use **My pages** to add the passages you know. Enter exact Qalun ayat and a physical length such as `0.5`.
-5. Review passages on Today, tapping Easy, Good, or Difficult when done. In Mistakes, add any slips you had.
-6. Use Settings → Export backup periodically. Browser site data can be deleted or lost when switching phones.
+## Your Mushaf and reference accuracy
 
-### Example GitHub Pages setup
+Target edition, supplied by the user: **دار الفجر الإسلامي، الطبعة السابعة، 604 pages**.
 
-Create a repository, upload the files from this folder into the repository root, commit them; open **Settings → Pages → Build and deployment → Deploy from a branch**, choose `main` and `/ (root)`. The site will be served as HTTPS. No Node/npm/server/database required.
+The existing metadata contains 114 Arabic surah names totaling 6,214 ayat. Its source labels this Qalun / al-Madani al-akhir: [Quranpedia Qalun index](https://quranpedia.app/quran/qaloon/index.html). `surahs.js` is the runtime table; `surahs-qalun.json` carries the metadata/provenance copy, with tests ensuring they agree.
 
-## Gemini (optional)
+**These counts and numbered boundaries have not been verified against the user's seventh edition.** The app states this limitation in its reference details and passage form. The source also describes Hafs-aligned text links, so it must not be used as an automatic mapping of numbered Qalun text boundaries.
 
-1. Obtain a personal Gemini API key from https://aistudio.google.com/apikey
-2. App Settings (gear) → paste key → Save.
-3. Mistakes → Log a mistake → Start recording → Stop. Or choose a saved audio recording or type a description.
-4. **Review every generated item against your printed Qalun Mushaf** before saving; Gemini is a formatting/transcription assistant and can hallucinate verse numbers, words or boundaries. Recording on Android requires microphone permission and HTTPS.
+No physical page map is shipped. Equal page totals do not establish identical layouts. Until an edition-specific map is verified, users choose exact passage references from their Mushaf and enter page amounts themselves. Do not replace this with Hafs counts or page mappings.
 
-Uses `gemini-2.5-flash` `models.generateContent` with inline audio (`audio/webm` etc.). The API has free-tier eligibility/quotas, which vary and may change; it is not guaranteed unlimited. Internet is required for Gemini; everything else is offline after PWA install.
+See [the platform evaluation](docs/platform-evaluation.md) for the PWA decision and reference research. Verification against the printed index/end matter and numbered boundaries remains a release prerequisite for claiming edition-verified references.
 
-**Key security:** The key is never stored inside shipped source files and is kept in *sessionStorage* in the browser session. However, any browser-side Gemini call makes the key available to the device/browser and requests, so **this direct-from-client approach is for private personal testing, not distributing a shared app**. For a publicly deployed version with multiple users, make authenticated Gemini calls through your own backend/serverless proxy; use key restrictions and rate limits.
+## Scheduling policy v2
 
-## Limitations and edition differences
+The scheduler in `schedule.js` is a transparent heuristic with conservative product defaults, not a scientifically fitted memory model.
 
-The riwayah **does not uniquely determine where a printed page starts/ends**. A Qalun printing can use a different line count and number of pages from another Qalun edition. The app intentionally **never invents a surah's physical page count or maps ayat to pages**. You enter the exact ayah range and physical page equivalent. For automatic page-boundary import later, choose your precise Mushaf edition and a verified page-to-ayah mapping.
+- Passages first memorized fewer than seven days ago rehearse daily.
+- Difficult returns tomorrow. The next successful review after a lapse also stays daily before expanding again.
+- Older passages grow according to the current rating, the last six ratings, and elapsed time since review. Successful overdue recall receives only a bounded bonus.
+- Good preserves or increases an established interval; Easy grows faster. Age-dependent caps limit early growth to three days before day 21 and seven days before day 60.
+- Settings offers a maximum interval for future growth, default 30 days. Existing longer intervals are preserved on successful ratings, including after migration or lowering this preference.
+- Overdue items are never automatically rated as failures and are not duplicated for each missed day. The oldest due date comes first, with difficult passages first when dates tie.
+- The next date is calculated from actual review completion using local calendar dates. A passage can be completed once per day. The queue refreshes after midnight and on returning to the app.
 
-Qalun surah names/counts checked against https://quranpedia.app/quran/qaloon/index.html (6214 ayat). Metadata only. This version is not a Quran reading app and does not validate the textual correctness of user-specified corrections.
+Mistakes have a separate practice schedule (2, 4, 8, then 14 days after practice), with a “Mark solid” action. Quick session notes are linked to the passage without inventing an exact ayah number. History totals use the passage's current page amount; edits to its amount also affect displayed historical totals. Removing a passage removes its review history.
 
-## Development
+## Data and recovery
 
-Local serving (Node or Python):
+`storage.js` uses IndexedDB transactions. A successful review is displayed only after a committed write. Failed saves retain the current form/session. Revision checks prevent another open window from silently overwriting newer changes.
 
-```bash
-python -m http.server 8080
+On first launch, valid v1 data under localStorage key `hifz-qalun:v1` migrates to IndexedDB. The original localStorage copy is left intact; subsequent launches use IndexedDB. A corrupt record opens a recovery screen rather than silently starting with an empty library.
+
+Settings exports v2 JSON backups and accepts both v1 and v2 backups. Restore validates each passage, reference, date, rating, mistake, and session before asking for confirmation. The replacement is atomic and a pre-restore copy can be downloaded from Settings. Restore replaces current data rather than merging it.
+
+“Protect device storage” requests browser persistence where supported. A request can be denied, and users can still deliberately clear site data. Keep exported backups, particularly before changing phones or domains. Data belongs to its browser origin; migration across domains requires export/import.
+
+## Voice mistakes
+
+Use the microphone on Today or **Speak a mistake** during a review. Describe what happened in Arabic or English, tap **Stop & transcribe**, then check and save the proposed mistake. You can choose an audio file instead. Multiple reported mistakes appear as separate editable drafts, saved one at a time. Nothing is logged until you choose Save. Manual logging stays available.
+
+Settings → Voice mistakes accepts a dedicated Gemini API key. The key is saved as a separate IndexedDB record, never included in review backups or app files, and is sent only to Google's Gemini endpoint in the authentication header. On another phone or browser origin, connect the key once again. There is no shared key in this repository. This direct browser integration is intended for this personal app; browser users with access to the device can inspect their own saved key.
+
+`voice.js` uses Gemini 3.5 Flash-Lite's audio input and structured output through the Interactions API (`store: false`). Only the selected passage context and that recording are sent, not the full library or history. The model transcribes the user's description; it is not a Quran recitation checker. Unknown or impossible ayah references stay unspecified for manual verification. Check every draft against your Qalun Mushaf.
+
+Recording requires microphone permission and HTTPS or localhost. Recordings stop at two minutes; inline clips must be under 10 MB. The microphone is released on stop, cancellation, or closing the dialog. Failed requests retain the clip in the open dialog for replay, download, and retry; closing the dialog discards unsaved audio. Core reviews and manual notes remain offline; transcription needs internet, available quota, and model availability. No billing is enabled by the app.
+
+## Run locally
+
+Node.js 22+:
+
+```sh
+npm install
+npm start
 ```
 
-Visit http://localhost:8080/. PWA installation and microphone use require localhost or HTTPS. No build step.
+Open [localhost:4173](http://localhost:4173). There is no build step. Node is needed only for the development server and checks, not production hosting. The development server binds to loopback; use an HTTPS deployment when testing installation on a phone.
 
-Files: `app.js` (UI/storage/Gemini), `surahs.js` (114 metadata), `schedule.js` (scheduler), `index.html`/`style.css`, `sw.js` (offline), icons/manifest. All private review data is stored locally as key `hifz-qalun:v1`.
+```sh
+npm test
+npm run test:browser
+npm run format:check
+```
+
+Browser tests use installed Google Chrome locally. In CI, install Playwright Chromium (`npx playwright install --with-deps chromium`); the config chooses it when `CI` is set. Tests cover migration, exact/fractional passages, overlap prevention, session resumption, offline cold launch, save failure, backup restoration/recovery, midnight rollover, concurrent windows, responsive layout, keyboard focus, and safe service-worker updates. Visual test captures are kept in ignored `.local/`.
+
+## Host and install on Samsung
+
+Publish the following files together to an HTTPS static host:
+
+```text
+index.html          style.css          app.js
+schedule.js         model.js           storage.js
+voice.js
+surahs.js           surahs-qalun.json   sw.js
+manifest.webmanifest
+icon.svg            icon-192.png       icon-512.png
+```
+
+Keep `CNAME` when using the repository's existing GitHub Pages custom domain. No database service or bundler is needed. Do not ship `node_modules`, backups, or local test artifacts.
+
+Open the hosted page in **Chrome on Android**, then use **⋮ → Add to Home screen → Install** (wording may vary). Leave the app open while connected for the first cache installation. Settings reports offline-file readiness. Then test a cold launch in airplane mode on the Samsung.
+
+## Release updates
+
+Bump the app-shell cache version in `sw.js` whenever a cached file changes, and deploy all shell files as one release. Service-worker installation caches the complete shell before it can activate. A waiting update is announced in the app. Finish or pause your review and close forms before choosing “Update when ready.” Updates initiated in another window do not force an active session or form to reload.
+
+The first upgrade from the original v1 app may require closing all old app windows and reopening once: its old interface cannot show the new waiting-update prompt. Browser-managed activation after all windows close remains supported.
+
+Still to verify on the user's physical Samsung: installation, storage persistence decisions, keyboard behavior, airplane-mode cold start, and updating an existing installation. Reliable offline reminders remain optional and are not included. If needed later, an Android target can reuse the UI and scheduling through Capacitor.

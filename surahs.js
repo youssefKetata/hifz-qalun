@@ -114,8 +114,20 @@ export const SURAHS = `الفاتحة|7
 المسد|5
 الإخلاص|4
 الفلق|5
-الناس|6`.split('\n').map((line,i)=>{
-  const [name,count] = line.split('|');return {id:i+1,name,count:Number(count)};
-});
-export function surah(n){return SURAHS[Number(n)-1] || SURAHS[1]}
-export function passageLabel(p){const a=surah(p.fromS),b=surah(p.toS);return Number(p.fromS)===Number(p.toS)?`${a.name} · ${p.fromA}–${p.toA}`:`${a.name} ${p.fromA} ← ${b.name} ${p.toA}`;}
+الناس|6`
+  .split('\n')
+  .map((line, i) => {
+    const [name, count] = line.split('|');
+    return { id: i + 1, name, count: Number(count) };
+  });
+export function surah(n) {
+  return SURAHS[Number(n) - 1] || SURAHS[1];
+}
+// Isolate the numeric range so an Arabic paragraph cannot display 74–90 as 90–74.
+export function passageLabel(p) {
+  const a = surah(p.fromS),
+    b = surah(p.toS);
+  return Number(p.fromS) === Number(p.toS)
+    ? `${a.name} · \u2066${p.fromA}–${p.toA}\u2069`
+    : `${a.name} ${p.fromA} ← ${b.name} ${p.toA}`;
+}
