@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#153b33"><meta name="description" content="A quiet daily Quran memorization review journal for Qalun recitation.">
+<link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon.svg" type="image/svg+xml">
+<title>Hifz — قالون</title><link rel="stylesheet" href="./style.css">
+</head><body>
+<div class="app">
+ <header class="topbar"><div class="brand-icon">۞</div><div class="brand"><div class="brand-title">Hifz <span>حفظي</span></div><small>Qalun · قالون عن نافع</small></div><button id="settings-open" class="icon-btn" aria-label="Settings">⚙</button></header>
+ <main>
+  <section id="view-today" class="view active" aria-label="Today">
+   <div class="eyebrow" id="date-label">YOUR DAILY PRACTICE</div>
+   <h1>Today's revision<span class="dot">.</span></h1>
+   <p class="lede">A little, consistently. Review what matters most.</p>
+   <div class="overview"><div><small>Due today</small><strong id="due-count">0</strong><span>passages</span></div><div class="divider-v"></div><div><small>Review load</small><strong id="due-pages">0</strong><span>page equivalents</span></div><div class="divider-v"></div><div><small>Completed</small><strong id="completed-count">0</strong><span>today</span></div></div>
+   <div class="section-row"><h2>Review plan</h2><button class="link-btn" data-nav="pages">Manage pages →</button></div>
+   <div id="today-plan"></div><button class="outline-btn wide" id="quick-mistake" style="margin-top:10px">🎙 &nbsp; Log a mistake during review</button>
+   <div class="section-row"><h2>Weak spots</h2><button class="link-btn" data-nav="mistakes">All mistakes →</button></div>
+   <div id="today-mistakes"></div>
+   <div class="guide"><div class="guide-title">✦ &nbsp; During your review</div><ol><li>Recite without looking. Pause briefly when stuck.</li><li>Check the Mushaf, then repeat from before the error.</li><li>Record the mistake and rate how the passage felt.</li></ol></div>
+  </section>
+  <section id="view-mistakes" class="view" aria-label="Mistakes">
+   <div class="eyebrow">IMPROVE YOUR RECALL</div><h1>Mistake journal<span class="dot">.</span></h1>
+   <p class="lede">Record a slip in seconds. Revisit it tomorrow.</p>
+   <button class="primary-btn wide" id="new-mistake">🎙 &nbsp; Log a mistake</button>
+   <div class="section-row"><h2>Needs practice</h2><span class="count-pill" id="mistake-count">0</span></div>
+   <div id="mistake-list"></div>
+  </section>
+  <section id="view-pages" class="view" aria-label="My pages">
+   <div class="eyebrow">YOUR MEMORIZED PASSAGES</div><h1>My pages<span class="dot">.</span></h1>
+   <p class="lede">Set the exact ayah boundaries. Half-pages are welcome.</p>
+   <button class="primary-btn wide" id="add-pages">＋ &nbsp; Add memorized passage</button>
+   <div id="library-stats" class="mini-stats"></div>
+   <div class="section-row"><h2>Your passages</h2><span class="count-pill" id="library-count">0</span></div>
+   <div id="library-list"></div>
+  </section>
+ </main>
+ <nav class="bottom-nav" aria-label="Main navigation"><button class="nav-item active" data-nav="today"><span class="nav-icon">◫</span>Today</button><button class="nav-item" data-nav="mistakes"><span class="nav-icon">⌁</span>Mistakes</button><button class="nav-item" data-nav="pages"><span class="nav-icon">▤</span>My pages</button></nav>
+</div>
+<div id="modal-backdrop" class="modal-backdrop" hidden><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="sheet-grab"></div><div class="modal-heading"><h2 id="modal-title">New</h2><button id="modal-close" class="icon-btn" aria-label="Close">✕</button></div><div id="modal-body"></div></div></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="./app.js"></script>
+</body></html>
