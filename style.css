@@ -1290,6 +1290,7 @@
     height: 18px;
   }
   .single-column {
+    margin-inline: auto;
     margin-bottom: 0;
   }
   .library-grid {
