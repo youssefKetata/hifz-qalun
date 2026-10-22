@@ -68,6 +68,8 @@ test('empty library actions clear the bottom bar', async ({ page }) => {
 test('passage amount and date controls align even with help text and wrapped labels', async ({ page }) => {
   await load(page);
   await page.getByRole('button', { name: 'Add passage', exact: false }).click();
+  await page.getByRole('tab', { name: 'Ayat', exact: true }).click();
+  await page.getByText('Page amount & review details', { exact: true }).click();
   for (const width of [320, 390, 458, 760]) {
     await page.setViewportSize({ width, height: 720 });
     const amount = await page.locator('#pages').boundingBox();

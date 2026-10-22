@@ -1,29 +1,29 @@
 # Hifz — Qalun Review
 
-A mobile-first, installable PWA for daily Quran memorization revision. **قالون عن نافع**. Core reviews, manual mistakes, and scheduling work offline after the app files are cached. Optional voice mistakes use your own Gemini API key and an internet connection. No backend or runtime dependency is required.
+A mobile-first, installable PWA for daily Quran memorization revision. **قالون عن نافع · المصحف الشامي**. Core reviews, page/ayah entry, reference lookup, manual mistakes, and scheduling work offline after the app files are cached. Optional voice passage entry and voice mistakes use your own Gemini API key and an internet connection. No backend or runtime dependency is required.
 
 ## Daily use
 
-1. Add a passage using inclusive start/end surah and ayah references. Ranges can cross surahs.
-2. Enter its physical length in quarter-page increments (`0.25`, `0.5`, `1`, `1.5`, …), when you first memorized it, and an optional page label.
+1. Choose **Add passage → Say it**, describe a range in Arabic or English, and check the draft. You can type a natural-language description instead, choose whole **Pages**, or select exact **Ayat**. Ranges can cross surahs. **Continue after my last passage** starts at the next unmemorized boundary after the furthest saved passage.
+2. Check the surah/ayah boundaries, first and last verse text, and exact Shami page span. Whole-page selections give an exact page amount. Partial-page workload is estimated from vertical verse positions and rounded to a quarter page; adjust it under **Page amount & review details**. Change the memorization date or starting interval there when needed. Nothing is saved until **Confirm & add**.
 3. Open **Today**, then **Start revision**. Recite independently and check your printed Mushaf.
 4. Log a quick note or an exact mistake. Choose **Difficult**, **Good**, or **Easy** to complete the passage; each button previews the next review date.
 5. Pause and return anytime. Your session, completed passages, and saved draft note survive reopening. Wait for “Note saved” before closing.
 6. Revisit the mistake journal and export a backup periodically from Settings.
 
-Today shows only the due page amount, start/continue action, due passages, the microphone, and mistakes due for practice. With no work due, it shows a short caught-up state. Navigation contains Today, Memorization, and Mistakes; review history is available in Settings. New memorization is always chosen by you. Overlapping new ranges are rejected; overlapping legacy entries are retained and flagged for correction. Page totals are user-entered equivalents, not an inferred page map.
+Today shows only the due page amount, start/continue action, due passages, the microphone, and mistakes due for practice. With no work due, it shows a short caught-up state. Navigation contains Today, Memorization, and Mistakes; review history is available in Settings. New memorization is always chosen by you. Overlapping new ranges are rejected. Daily page totals use the workload amount you confirm, including any manual adjustment.
 
 ## Your Mushaf and reference accuracy
 
-Target edition, supplied by the user: **دار الفجر الإسلامي، الطبعة السابعة، 604 pages**.
+Selected reference: **Qalun / Kotteb Shami Mushaf**, 604 pages, 114 surahs and 6,214 numbered verses. The [source chapter metadata](https://quranapi.lissene.dev/api/v1/quran/riwayat/67a310a41b4df754ac33ca94/data) and paginated verse/page records were extracted and checked on 22 October 2026.
 
-The existing metadata contains 114 Arabic surah names totaling 6,214 ayat. Its source labels this Qalun / al-Madani al-akhir: [Quranpedia Qalun index](https://quranpedia.app/quran/qaloon/index.html). `surahs.js` is the runtime table; `surahs-qalun.json` carries the metadata/provenance copy, with tests ensuring they agree.
+`shami-data.js` contains the selected surah counts, page boundaries, verse text and normalized vertical position bands. `reference.js` performs local reference validation, page lookup, whole-page selection and partial-page workload estimates. `surahs-qalun.json` carries the metadata/provenance copy. No audio, Kotteb app code, fonts or page images are bundled. The app does not contact Kotteb during normal use.
 
-**These counts and numbered boundaries have not been verified against the user's seventh edition.** The app states this limitation in its reference details and passage form. The source also describes Hafs-aligned text links, so it must not be used as an automatic mapping of numbered Qalun text boundaries.
+All 604 pages and 6,214 unique verse IDs are present, without page or verse-number gaps. All 114 chapter counts and chapter page boundaries agree with the detailed records. There are 51 pages containing more than one surah. The catalog summary reports an inconsistent Shami verse total, so the app uses the internally consistent detailed records. Tests include a shared page spanning An-Nisa and Al-Ma'idah and the final page's three surahs.
 
-No physical page map is shipped. Equal page totals do not establish identical layouts. Until an edition-specific map is verified, users choose exact passage references from their Mushaf and enter page amounts themselves. Do not replace this with Hafs counts or page mappings.
+The user's printed Mushaf is **دار الفجر الإسلامي، الطبعة السابعة**. A match to that printed edition has not been independently established. Hifz identifies its selected reference as Shami and does not claim Dar al-Fajr verification. Check boundaries against the Mushaf in use. The user confirmed there are no saved passages to migrate when selecting Shami; no automatic conversion between numbering systems is attempted.
 
-See [the platform evaluation](docs/platform-evaluation.md) for the PWA decision and reference research. Verification against the printed index/end matter and numbered boundaries remains a release prerequisite for claiming edition-verified references.
+See [the Shami reference notes](docs/shami-reference.md) for the extraction checks and estimate limits, and [the original platform evaluation](docs/platform-evaluation.md) for the PWA decision.
 
 ## Scheduling policy v2
 
@@ -50,6 +50,8 @@ Settings exports v2 JSON backups and accepts both v1 and v2 backups. Restore val
 “Protect device storage” requests browser persistence where supported. A request can be denied, and users can still deliberately clear site data. Keep exported backups, particularly before changing phones or domains. Data belongs to its browser origin; migration across domains requires export/import.
 
 ## Voice mistakes
+
+Passage entry uses the same Gemini connection and recorder as mistake logging. It supports one contiguous ayah range, an entire surah, or whole page numbers. Gemini only interprets the description; all references and page amounts are calculated and validated locally. Ambiguous or invalid descriptions cannot be saved as a default passage. Recordings and typed descriptions remain available for retry after a provider failure. Closing a recording cancels the request and releases the microphone. Confirmation is always required to save.
 
 Use the microphone on Today or **Speak a mistake** during a review. Describe what happened in Arabic or English, tap **Stop & transcribe**, then check and save the proposed mistake. You can choose an audio file instead. Multiple reported mistakes appear as separate editable drafts, saved one at a time. Nothing is logged until you choose Save. Manual logging stays available.
 
@@ -85,7 +87,7 @@ Publish the following files together to an HTTPS static host:
 ```text
 index.html          style.css          app.js
 schedule.js         model.js           storage.js
-voice.js
+voice.js            reference.js       shami-data.js
 surahs.js           surahs-qalun.json   sw.js
 manifest.webmanifest
 icon.svg            icon-192.png       icon-512.png

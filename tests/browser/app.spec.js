@@ -84,6 +84,8 @@ test('empty state, mobile and desktop layouts remain readable', async ({ page })
 test('add exact cross-surah fraction, reject overlap, preserve edits and pauses', async ({ page }) => {
   await open(page);
   await page.getByRole('button', { name: 'Add your first passage' }).click();
+  await page.getByRole('tab', { name: 'Ayat', exact: true }).click();
+  await page.getByText('Page amount & review details', { exact: true }).click();
   await page.getByLabel('Starting surah').selectOption('2');
   await page.getByLabel('Starting ayah').selectOption('280');
   await page.getByLabel('Ending surah').selectOption('3');
@@ -91,15 +93,16 @@ test('add exact cross-surah fraction, reject overlap, preserve edits and pauses'
   await page.getByLabel('Amount on your pages').fill('1.5');
   await page.getByLabel('First memorized on').fill('2026-10-01');
   await page.getByLabel('Page number / note').fill('My own boundaries');
-  await page.getByRole('button', { name: 'Add to my revision' }).click();
+  await page.getByRole('button', { name: 'Confirm & add' }).click();
   await expect(page.getByRole('heading', { name: 'Your memorization', exact: true })).toBeVisible();
   await expect(page.locator('.library-card')).toHaveCount(1);
   await page.getByRole('button', { name: 'Add passage', exact: false }).click();
+  await page.getByRole('tab', { name: 'Ayat', exact: true }).click();
   await page.getByLabel('Starting surah').selectOption('3');
   await page.getByLabel('Starting ayah').selectOption('3');
   await page.getByLabel('Ending surah').selectOption('3');
   await page.getByLabel('Ending ayah').selectOption('10');
-  await page.getByRole('button', { name: 'Add to my revision' }).click();
+  await page.getByRole('button', { name: 'Confirm & add' }).click();
   await expect(page.locator('#form-error')).toContainText('overlaps');
   await page.getByRole('button', { name: 'Close dialog' }).click();
   await page.getByRole('button', { name: 'Edit', exact: true }).click();

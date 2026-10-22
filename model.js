@@ -1,8 +1,9 @@
 import { SURAHS } from './surahs.js';
 import { addDays, dateISO } from './schedule.js';
+import { REFERENCE_ID } from './reference.js';
 
 export const SCHEMA_VERSION = 2;
-export const EDITION = 'دار الفجر الإسلامي · الطبعة السابعة · 604 صفحات';
+export const EDITION = 'قالون عن نافع · المصحف الشامي · 604 صفحات';
 export function emptyState() {
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -11,7 +12,7 @@ export function emptyState() {
     mistakes: [],
     revisionHistory: [],
     session: null,
-    settings: { maxInterval: 30, edition: EDITION },
+    settings: { maxInterval: 30, edition: EDITION, reference: REFERENCE_ID },
   };
 }
 const fail = (message) => {
@@ -151,7 +152,7 @@ export function validateState(input) {
     mistakes,
     session,
     revisionHistory: input.revisionHistory || [],
-    settings: { ...settings, maxInterval, edition: settings.edition || EDITION },
+    settings: { ...settings, maxInterval, edition: EDITION, reference: REFERENCE_ID },
   };
 }
 export function parseBackup(value) {

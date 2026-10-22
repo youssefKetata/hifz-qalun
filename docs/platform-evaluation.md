@@ -2,6 +2,8 @@
 
 Date: 21 October 2026. Repository inspected at commit `1122778`.
 
+Update, 22 October 2026: the user selected the Kotteb Shami Qalun reference. Its complete verse/page records are now available locally; see [the current reference notes](shami-reference.md). The research below records the original platform decision and its then-unverified reference candidates.
+
 ## Recommendation
 
 Continue with an installable Chrome PWA for the first version. The user confirmed that reminders while the app is closed and offline are optional. The core workflow—view today's queue, recite independently, log mistakes, rate recall, and save the next due date—can run entirely on the device.

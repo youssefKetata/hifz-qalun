@@ -20,7 +20,8 @@ import {
   activeSessionPassages,
 } from './model.js';
 import { openStorage, LEGACY_KEY } from './storage.js';
-import { VoiceRecorder, transcribeMistakes } from './voice.js';
+import { VoiceRecorder, transcribeMistakes, transcribePassage } from './voice.js';
+import { passageInfo, rangeForPages, continueAfter, REFERENCE_NAME } from './reference.js';
 
 const micIcon =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg>';
@@ -321,28 +322,181 @@ function passageForm(id) {
     note: '',
   };
   openModal(
-    original ? 'Edit your passage' : 'Add what you know',
-    `<p class="help">Choose the exact boundaries in your Qalun Mushaf. The ending ayah is included.</p><form id="passage-form">${errorArea}
+    original ? 'Edit your passage' : 'Add memorization',
+    `<p class="entry-intro">${original ? 'Check the boundaries, then save your changes.' : 'Tell Hifz what you know. Check it, then add it.'}</p>
+    <div class="entry-switch" role="tablist" aria-label="Choose how to add a passage">
+      <button type="button" role="tab" id="entry-tab-voice" data-entry-mode="voice" aria-controls="entry-voice" aria-selected="${!original}">${micIcon} Say it</button>
+      <button type="button" role="tab" id="entry-tab-pages" data-entry-mode="pages" aria-controls="entry-pages" aria-selected="false">Pages</button>
+      <button type="button" role="tab" id="entry-tab-ayahs" data-entry-mode="ayahs" aria-controls="entry-ayahs" aria-selected="${Boolean(original)}">Ayat</button>
+    </div>
+    ${!original && continueAfter(state.passages) ? `<button type="button" class="continue-passage text-button" id="continue-passage">Continue after my last passage <span aria-hidden="true">→</span></button>` : ''}
+    <div id="entry-voice" role="tabpanel" aria-labelledby="entry-tab-voice" ${original ? 'hidden' : ''}>${voicePanel('passage')}<div id="passage-heard" class="passage-heard" hidden><div><span class="eyebrow">YOU SAID</span><p id="passage-heard-text" dir="auto"></p></div><button type="button" class="text-button" id="change-passage-description">Change</button></div></div>
+    <form id="passage-form">${errorArea}
+    <div id="entry-pages" role="tabpanel" aria-labelledby="entry-tab-pages" hidden><p class="help">Choose whole pages in the Shami Mushaf. For part of a page, use Ayat.</p><div class="form-row"><div class="field"><label for="from-page">From page</label><input class="input" id="from-page" type="number" inputmode="numeric" min="1" max="604" value="1"></div><div class="field"><label for="to-page">Through page</label><input class="input" id="to-page" type="number" inputmode="numeric" min="1" max="604" value="1"></div></div></div>
+    <div id="entry-ayahs" role="tabpanel" aria-labelledby="entry-tab-ayahs" ${original ? '' : 'hidden'}><p class="help">The ending ayah is included.</p>
     <div class="field"><span>From</span><div class="range-grid"><select id="fromS" class="input" aria-label="Starting surah">${surahOptions(p.fromS)}</select><select id="fromA" class="input" aria-label="Starting ayah"></select></div></div>
     <div class="field"><span>To (inclusive)</span><div class="range-grid"><select id="toS" class="input" aria-label="Ending surah">${surahOptions(p.toS)}</select><select id="toA" class="input" aria-label="Ending ayah"></select></div></div>
+    </div>
+    <section id="passage-result" class="passage-result" aria-label="Passage to confirm" aria-live="polite" hidden></section>
+    <div id="passage-review-details" ${original ? '' : 'hidden'}><details id="review-details" ${original ? 'open' : ''}><summary>Page amount & review details</summary><div class="spacer">
     <div class="form-row"><div class="field"><label for="pages">Amount on your pages</label><input id="pages" class="input" type="number" inputmode="decimal" min="0.25" max="604" step="0.25" value="${p.pages}" required><small>0.25, 0.5, 1, 1.5… pages</small></div><div class="field"><label for="created">First memorized on</label><input id="created" class="input" type="date" max="${dateISO()}" value="${p.created}" required></div></div>
     <div class="field"><label for="passage-note">Page number / note <span class="muted">(optional)</span></label><input id="passage-note" class="input" maxlength="10000" value="${safe(p.note)}" placeholder="e.g. page 12, lower half"></div>
     <details><summary class="small muted">${original ? 'Review interval' : 'Adding established memorization?'}</summary><div class="field spacer"><label for="interval">${original ? 'Current review interval' : 'Starting review interval'}</label><input id="interval" class="input" type="number" min="1" max="3650" step="1" value="${p.interval}" required><small>Days between reviews. Fresh passages rehearse daily during their first week.</small></div></details>
-    <p class="reference-note">${safe(EDITION)}<br>Page amounts come from you. Edition-specific ayah numbering is still being verified.</p><button class="primary wide" type="submit">${original ? 'Save changes' : 'Add to my revision'} →</button></form>`,
+    </div></details></div><button id="passage-save" class="primary wide passage-save" type="submit" ${original ? '' : 'disabled'}>${original ? 'Save changes' : 'Confirm & add'} →</button><p class="entry-reference">${safe(REFERENCE_NAME)} · 604 pages</p></form>`,
   );
+  let hasRange = Boolean(original),
+    voiceBusy = false;
   populateAyahs($('#fromA'), p.fromS, p.fromA);
   populateAyahs($('#toA'), p.toS, p.toA);
+  const currentRange = () => ({
+    fromS: Number($('#fromS').value),
+    fromA: Number($('#fromA').value),
+    toS: Number($('#toS').value),
+    toA: Number($('#toA').value),
+  });
+  function preview(suggestAmount = false) {
+    const card = $('#passage-result');
+    $('#passage-save').disabled = !hasRange || voiceBusy;
+    card.hidden = !hasRange;
+    $('#passage-review-details').hidden = !hasRange;
+    if (!hasRange) return;
+    try {
+      const range = currentRange(),
+        info = passageInfo(range);
+      if (suggestAmount) $('#pages').value = String(info.estimatedPages);
+      const amount = Number($('#pages').value);
+      const pageLabel =
+        info.firstPage === info.lastPage
+          ? `Page ${info.firstPage}`
+          : `Pages ${info.firstPage}–${info.lastPage}`;
+      const excerpt = (text) => safe(text.length > 170 ? `${text.slice(0, 170)}…` : text);
+      card.innerHTML = `<div class="passage-result-top"><span class="eyebrow">CHECK YOUR PASSAGE</span><button type="button" class="text-button" id="edit-passage-ayat">Edit ayat</button></div><h3 class="arabic" lang="ar">${safe(passageLabel(range))}</h3><p class="passage-map">${pageLabel} <span>· ${info.verseCount} ayat</span></p><div class="passage-bookends"><div><span>Starts with</span><p lang="ar" dir="rtl">${excerpt(info.firstText)}</p></div>${info.firstId !== info.lastId ? `<div><span>Ends with</span><p lang="ar" dir="rtl">${excerpt(info.lastText)}</p></div>` : ''}</div><div class="passage-amount"><div><strong>${Number.isFinite(amount) ? fmt(amount) : '—'} page${amount === 1 ? '' : 's'}</strong><small>${info.partial ? 'Estimated workload · adjustable below' : 'Page amount · adjustable below'}</small></div><button type="button" class="text-button" id="adjust-page-amount">Adjust</button></div>`;
+      $('#edit-passage-ayat').onclick = () => chooseMode('ayahs');
+      $('#adjust-page-amount').onclick = () => {
+        $('#review-details').open = true;
+        $('#pages').focus();
+      };
+      card.querySelectorAll('button').forEach((button) => {
+        button.disabled = voiceBusy;
+      });
+      $('#form-error').hidden = true;
+    } catch (reason) {
+      card.hidden = true;
+      $('#passage-save').disabled = true;
+      formError(reason.message);
+    }
+  }
+  function setRange(range) {
+    $('#fromS').value = String(range.fromS);
+    populateAyahs($('#fromA'), range.fromS, range.fromA);
+    $('#toS').value = String(range.toS);
+    populateAyahs($('#toA'), range.toS, range.toA);
+    hasRange = true;
+    preview(true);
+  }
+  function pageRange() {
+    try {
+      const range = rangeForPages(Number($('#from-page').value), Number($('#to-page').value));
+      setRange(range);
+    } catch (reason) {
+      hasRange = false;
+      preview();
+      formError(reason.message);
+    }
+  }
+  function chooseMode(mode) {
+    if (voiceBusy) return;
+    for (const tab of document.querySelectorAll('[data-entry-mode]')) {
+      tab.setAttribute('aria-selected', String(tab.dataset.entryMode === mode));
+      tab.tabIndex = tab.dataset.entryMode === mode ? 0 : -1;
+    }
+    for (const name of ['voice', 'pages', 'ayahs']) $(`#entry-${name}`).hidden = name !== mode;
+    if (mode === 'pages') {
+      if (hasRange) {
+        try {
+          const info = passageInfo(currentRange());
+          $('#from-page').value = info.firstPage;
+          $('#to-page').value = info.lastPage;
+        } catch {
+          /* Keep the last valid page selection. */
+        }
+      }
+      pageRange();
+    } else if (mode === 'ayahs') {
+      hasRange = true;
+      preview(!original);
+    }
+  }
+  document.querySelectorAll('[data-entry-mode]').forEach((tab) => {
+    tab.onclick = () => chooseMode(tab.dataset.entryMode);
+  });
+  document.querySelectorAll('[data-entry-mode]').forEach((tab, index, tabs) => {
+    tab.tabIndex = tab.getAttribute('aria-selected') === 'true' ? 0 : -1;
+    tab.onkeydown = (event) => {
+      const next =
+        event.key === 'ArrowRight'
+          ? (index + 1) % 3
+          : event.key === 'ArrowLeft'
+            ? (index + 2) % 3
+            : event.key === 'Home'
+              ? 0
+              : event.key === 'End'
+                ? 2
+                : null;
+      if (next == null) return;
+      event.preventDefault();
+      chooseMode(tabs[next].dataset.entryMode);
+      tabs[next].focus();
+    };
+  });
+  $('#continue-passage')?.addEventListener('click', () => {
+    setRange(continueAfter(state.passages));
+    chooseMode('ayahs');
+  });
+  $('#from-page').oninput = pageRange;
+  $('#to-page').oninput = pageRange;
+  $('#pages').oninput = () => preview();
   $('#fromS').addEventListener('change', () => {
     populateAyahs($('#fromA'), Number($('#fromS').value));
     if (Number($('#toS').value) < Number($('#fromS').value)) {
       $('#toS').value = $('#fromS').value;
       populateAyahs($('#toA'), Number($('#toS').value));
     }
+    preview(true);
   });
-  $('#toS').addEventListener('change', () => populateAyahs($('#toA'), Number($('#toS').value)));
+  $('#toS').addEventListener('change', () => {
+    populateAyahs($('#toA'), Number($('#toS').value));
+    preview(true);
+  });
+  $('#fromA').onchange = $('#toA').onchange = () => preview(true);
+  preview();
+  attachVoice(null, {
+    kind: 'passage',
+    onPassage(draft) {
+      if (!draft.range) {
+        hasRange = false;
+        preview();
+        return;
+      }
+      setRange(draft.range);
+      $('.passage-voice-panel').hidden = true;
+      $('#passage-heard').hidden = false;
+      $('#passage-heard-text').textContent = draft.transcript;
+    },
+    onMode(mode) {
+      voiceBusy = mode !== 'ready';
+      if (mode === 'requesting' || mode === 'processing') hasRange = false;
+      preview();
+    },
+  });
+  $('#change-passage-description').onclick = () => {
+    $('.passage-voice-panel').hidden = false;
+    $('#passage-heard').hidden = true;
+    $('#voice-record').focus();
+  };
   $('#passage-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || voiceBusy || !hasRange) return;
     const values = {
       id: original?.id || uid(),
       fromS: Number($('#fromS').value),
@@ -391,10 +545,12 @@ function passageForm(id) {
     }
   });
 }
-function voicePanel() {
-  return `<section class="voice-panel" aria-label="Voice mistake logging"><button id="voice-record" class="voice-record" type="button" ${voiceKey ? '' : 'disabled'}>${micIcon}<span>Speak a mistake</span></button><p id="voice-status" class="small muted" role="status">${voiceKey ? 'Speak in Arabic or English. Gemini drafts; you check and save.' : 'Connect Gemini once to use the microphone.'}</p><div id="voice-key-setup" ${voiceKey ? 'hidden' : ''}><label class="field spacer"><span>Gemini API key</span><input id="voice-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Hifz key"></label><button class="secondary" type="button" id="voice-key-save">Save key on this device</button></div><div class="voice-tools"><label class="text-button" for="voice-file">Choose audio instead</label><input type="file" id="voice-file" accept="audio/*,.webm" hidden><button class="text-button" type="button" id="voice-cancel" hidden>Cancel</button><button class="text-button" type="button" id="voice-retry" hidden>Retry transcription</button></div><details id="voice-preview" hidden><summary class="small muted">Recording & transcript</summary><audio id="voice-playback" controls preload="metadata"></audio><p id="voice-transcript" class="note" dir="auto"></p><a id="voice-download" class="text-button" download="hifz-mistake.webm">Keep recording</a></details><p id="voice-draft-count" class="small" hidden></p></section>`;
+function voicePanel(kind = 'mistake') {
+  const isPassage = kind === 'passage';
+  return `<section class="voice-panel ${isPassage ? 'passage-voice-panel' : ''}" aria-label="${isPassage ? 'Voice passage entry' : 'Voice mistake logging'}">${isPassage ? '<p class="voice-example" lang="ar" dir="rtl">«البقرة من الآية 1 إلى 50»</p>' : ''}<button id="voice-record" class="voice-record" type="button" ${voiceKey ? '' : 'disabled'}>${micIcon}<span>${isPassage ? 'Say your passage' : 'Speak a mistake'}</span></button><p id="voice-status" class="small muted" role="status">${voiceKey ? (isPassage ? 'Arabic or English. Nothing is added until you confirm.' : 'Speak in Arabic or English. Gemini drafts; you check and save.') : 'Connect Gemini once to use the microphone.'}</p><div id="voice-key-setup" ${voiceKey ? 'hidden' : ''}><label class="field spacer"><span>Gemini API key</span><input id="voice-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Hifz key"></label><button class="secondary" type="button" id="voice-key-save">Save key on this device</button></div><div class="voice-tools"><button class="text-button" type="button" id="voice-file-open">Choose audio instead</button><input type="file" id="voice-file" accept="audio/*,.webm" hidden><button class="text-button" type="button" id="voice-cancel" hidden>Cancel</button><button class="text-button" type="button" id="voice-retry" hidden>Retry transcription</button></div>${isPassage ? '<details class="phrase-entry"><summary>Or type it in your own words</summary><form id="passage-phrase-form"><label class="field"><span>Describe your passage</span><input id="passage-phrase" class="input" maxlength="1000" dir="auto" placeholder="Al-Baqarah, ayat 1 to 50" required></label><button class="secondary" type="submit">Understand passage</button></form></details>' : ''}<details id="voice-preview" hidden><summary class="small muted">Recording & transcript</summary><audio id="voice-playback" controls preload="metadata"></audio><p id="voice-transcript" class="note" dir="auto"></p><a id="voice-download" class="text-button" download="hifz-mistake.webm">Keep recording</a></details><p id="voice-draft-count" class="small" hidden></p></section>`;
 }
-function attachVoice(passage) {
+function attachVoice(passage, { kind = 'mistake', onPassage, onMode = () => {} } = {}) {
+  const isPassage = kind === 'passage';
   let alive = true,
     mode = 'ready',
     recorder,
@@ -420,15 +576,26 @@ function attachVoice(passage) {
         ? 'Stop & transcribe'
         : next === 'processing'
           ? 'Transcribing…'
-          : 'Speak a mistake';
+          : isPassage
+            ? 'Say your passage'
+            : 'Speak a mistake';
     local('#voice-cancel').hidden = !['recording', 'processing', 'requesting'].includes(next);
     local('#voice-retry').hidden = !recording || next !== 'ready';
     local('#voice-file').disabled = next !== 'ready';
-    local('#mistake-form')
+    local('#voice-file-open').disabled = next !== 'ready';
+    local(isPassage ? '#passage-form' : '#mistake-form')
       .querySelectorAll('input, select, textarea, button')
       .forEach((field) => {
         field.disabled = next !== 'ready';
       });
+    root
+      .querySelectorAll(
+        '[data-entry-mode], #continue-passage, #passage-phrase-form input, #passage-phrase-form button',
+      )
+      .forEach((field) => {
+        field.disabled = next !== 'ready';
+      });
+    onMode(next);
   }
   function applyDraft(draft) {
     local('#msurah').value = String(draft.surah);
@@ -446,26 +613,40 @@ function attachVoice(passage) {
     if (!alive) return;
     const currentOperation = ++operation;
     recording = blob;
+    const isText = typeof blob === 'string';
     if (audioURL) URL.revokeObjectURL(audioURL);
-    audioURL = URL.createObjectURL(blob);
-    local('#voice-playback').src = audioURL;
-    local('#voice-download').href = audioURL;
-    local('#voice-download').download =
-      `hifz-mistake.${blob.type.includes('mp4') ? 'm4a' : blob.type.includes('wav') ? 'wav' : blob.type.includes('mpeg') ? 'mp3' : 'webm'}`;
+    audioURL = isText ? null : URL.createObjectURL(blob);
+    local('#voice-playback').hidden = local('#voice-download').hidden = isText;
+    if (!isText) {
+      local('#voice-playback').src = audioURL;
+      local('#voice-download').href = audioURL;
+      local('#voice-download').download =
+        `hifz-${isPassage ? 'passage' : 'mistake'}.${blob.type.includes('mp4') ? 'm4a' : blob.type.includes('wav') ? 'wav' : blob.type.includes('mpeg') ? 'mp3' : 'webm'}`;
+    }
     local('#voice-preview').hidden = false;
     request = new AbortController();
     const currentRequest = request;
     const timeout = setTimeout(() => currentRequest.abort(), 60000);
-    setMode('processing', 'Gemini is drafting your mistake…');
+    setMode('processing', isPassage ? 'Understanding your passage…' : 'Gemini is drafting your mistake…');
     try {
-      const draft = await transcribeMistakes(blob, {
-        apiKey: voiceKey,
-        surah: Number(local('#msurah').value),
-        passage,
-        signal: currentRequest.signal,
-      });
+      const draft = isPassage
+        ? await transcribePassage(blob, { apiKey: voiceKey, signal: currentRequest.signal })
+        : await transcribeMistakes(blob, {
+            apiKey: voiceKey,
+            surah: Number(local('#msurah').value),
+            passage,
+            signal: currentRequest.signal,
+          });
       if (!alive || currentOperation !== operation) return;
       local('#voice-transcript').textContent = draft.transcript;
+      if (isPassage) {
+        onPassage(draft);
+        setMode(
+          'ready',
+          draft.range ? 'Passage ready. Check the result below, then confirm.' : draft.clarification,
+        );
+        return;
+      }
       queue = [...draft.mistakes];
       total = queue.length;
       if (!queue.length) {
@@ -508,7 +689,9 @@ function attachVoice(passage) {
       return;
     }
     if (!navigator.onLine) {
-      status.textContent = 'Voice transcription needs internet. You can type your mistake below.';
+      status.textContent = isPassage
+        ? 'Voice needs internet. Choose Pages or Ayat to add offline.'
+        : 'Voice transcription needs internet. You can type your mistake below.';
       return;
     }
     const currentOperation = ++operation;
@@ -518,7 +701,12 @@ function attachVoice(passage) {
     try {
       await currentRecorder.start();
       if (!alive || currentOperation !== operation || currentRecorder.cancelled) return;
-      setMode('recording', 'Listening… Describe the mistake, then tap Stop.');
+      setMode(
+        'recording',
+        isPassage
+          ? 'Listening… Say the surah and ayat or page numbers, then tap Stop.'
+          : 'Listening… Describe the mistake, then tap Stop.',
+      );
       limit = setTimeout(stopAndProcess, 120000);
     } catch (reason) {
       if (alive && currentOperation === operation)
@@ -533,6 +721,7 @@ function attachVoice(passage) {
     }
   }
   recordButton.onclick = () => (mode === 'recording' ? stopAndProcess() : start());
+  local('#voice-file-open').onclick = () => local('#voice-file').click();
   local('#voice-file').onchange = (event) => {
     const file = event.target.files[0];
     if (!file || mode !== 'ready') return;
@@ -547,6 +736,15 @@ function attachVoice(passage) {
     processAudio(file);
   };
   local('#voice-retry').onclick = () => recording && processAudio(recording);
+  local('#passage-phrase-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (mode !== 'ready') return;
+    if (!voiceKey) {
+      status.textContent = 'Connect your Gemini key first, or choose Pages or Ayat.';
+      return;
+    }
+    processAudio(local('#passage-phrase').value.trim());
+  });
   local('#voice-cancel').onclick = () => {
     operation++;
     clearTimeout(limit);
@@ -699,7 +897,7 @@ function download(text, filename) {
 function referenceModal() {
   openModal(
     'Your Quran references',
-    `<div class="settings-section"><div class="arabic" lang="ar">قالون عن نافع</div><p class="arabic" lang="ar">${safe(EDITION)}</p><hr class="divider"><p>The current reference contains 114 surahs and 6,214 ayat, sourced from the <a href="https://quranpedia.app/quran/qaloon/index.html" target="_blank" rel="noopener">Quranpedia Qalun index</a>.</p><p class="spacer">Its counts and numbering have not yet been verified against your seventh edition. Check references in your printed Mushaf.</p><p class="spacer">Choose exact start and end ayat and enter the physical page amount yourself. Passages may cross surahs. Hifz does not infer page boundaries or use a Hafs page map.</p></div>`,
+    `<div class="settings-section"><p class="arabic" lang="ar">${safe(EDITION)}</p><hr class="divider"><p>The selected reference is the Kotteb Shami Qalun Mushaf: 604 pages, 114 surahs and 6,214 ayat. Its verse and page records were checked for complete, consistent numbering. <a href="https://quranapi.lissene.dev/api/v1/quran/riwayat/67a310a41b4df754ac33ca94/data" target="_blank" rel="noopener">Reference source</a>.</p><p class="spacer">Page ranges come from this Shami layout. Partial-page amounts are estimates from verse positions; adjust them to your workload. No Hafs page map is used.</p><p class="spacer">This does not establish a match with Dar al-Fajr’s seventh printed edition. Check your chosen boundaries against the Mushaf you use.</p></div>`,
   );
 }
 function settingsModal() {
@@ -1004,7 +1202,12 @@ $('#modal').addEventListener('keydown', (event) => {
     ...$('#modal').querySelectorAll(
       'button, a[href], input:not([type="hidden"]), select, textarea, summary, [tabindex]',
     ),
-  ].filter((element) => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length);
+  ].filter(
+    (element) =>
+      !element.disabled &&
+      element.tabIndex >= 0 &&
+      (element.checkVisibility ? element.checkVisibility() : element.getClientRects().length),
+  );
   const first = focusable[0],
     last = focusable.at(-1);
   if (!first) {
