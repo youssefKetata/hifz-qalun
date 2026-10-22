@@ -1,6 +1,6 @@
 // Bump the version whenever an app-shell file changes; deploy the files together.
 const PREFIX = `hifz-qalun:${self.registration.scope}:`;
-const CACHE = `${PREFIX}2.2.1`;
+const CACHE = `${PREFIX}2.2.2`;
 const FILES = [
   './',
   './index.html',

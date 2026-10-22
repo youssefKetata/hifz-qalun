@@ -171,7 +171,7 @@ test('manual mistakes support exact ayat, practice and resolving', async ({ page
   await seed(page);
   await open(page, '/#mistakes');
   await page.getByRole('button', { name: 'Log mistake' }).click();
-  await page.getByLabel('What needs practice?').fill('Forgot the continuation');
+  await page.getByLabel('ما الذي يحتاج إلى مراجعة؟').fill('Forgot the continuation');
   await page.getByLabel('Ayah', { exact: true }).selectOption('80');
   await page.getByRole('button', { name: 'Save mistake' }).click();
   await expect(page.locator('.mistake-card')).toContainText('ayah 80');

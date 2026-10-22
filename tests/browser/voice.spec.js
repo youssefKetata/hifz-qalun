@@ -2,10 +2,10 @@ import { test, expect } from '@playwright/test';
 
 const fakeKey = 'fake-hifz-gemini-key-for-browser-tests';
 const draft = {
-  transcript: 'I forgot the continuation in verse eighty.',
+  transcript: 'نسيت كيف نكمل في الآية ثمانين، وقلت كلمة في بلاصة أخرى.',
   mistakes: [
-    { surah: 2, ayah: 80, type: 'recall', note: 'Forgot the continuation', said: '', correct: '' },
-    { surah: 2, ayah: null, type: 'substitution', note: 'Mixed up two words', said: 'كلمة', correct: 'أخرى' },
+    { surah: 2, ayah: 80, type: 'recall', note: 'نسيت متابعة الآية', said: '', correct: '' },
+    { surah: 2, ayah: null, type: 'substitution', note: 'خلطت بين كلمتين', said: 'كلمة', correct: 'أخرى' },
   ],
 };
 async function connect(page) {
@@ -32,12 +32,18 @@ test('Gemini transcribes into multiple editable drafts, saved only after review'
   await openVoiceForm(page);
   await page.locator('#voice-file').setInputFiles(sample);
   await expect(page.locator('#voice-status')).toContainText('Draft ready');
-  await expect(page.getByLabel('What needs practice?')).toHaveValue('Forgot the continuation');
+  await expect(page.getByLabel('ما الذي يحتاج إلى مراجعة؟')).toHaveValue('نسيت متابعة الآية');
+  await expect(page.getByLabel('نوع الخطأ')).toHaveValue('recall');
+  await expect(page.getByLabel('نوع الخطأ').locator('option:checked')).toHaveText('نسيان المتابعة');
   await expect(page.getByLabel('Ayah', { exact: true })).toHaveValue('80');
   await expect(page.locator('#voice-draft-count')).toContainText('1 of 2');
   expect(request.headers()['x-goog-api-key']).toBe(fakeKey);
   expect(request.postDataJSON()).toMatchObject({ store: false, model: 'gemini-3.5-flash-lite' });
   expect(request.postDataJSON().input[1]).toMatchObject({ type: 'audio', mime_type: 'audio/wav' });
+  const prompt = request.postDataJSON().input[0].text;
+  expect(prompt).toContain('اكتب note بالعربية');
+  expect(prompt).toContain('انقل said وcorrect حرفياً');
+  expect(prompt.length).toBeLessThan(800);
   expect(
     await page.evaluate(async () => {
       const { openStorage } = await import('/storage.js');
@@ -49,12 +55,23 @@ test('Gemini transcribes into multiple editable drafts, saved only after review'
   ).toBe(0);
   await page.getByRole('button', { name: 'Save mistake' }).click();
   await expect(page.locator('#voice-draft-count')).toContainText('2 of 2');
-  await expect(page.getByLabel('What needs practice?')).toHaveValue('Mixed up two words');
+  await expect(page.getByLabel('ما الذي يحتاج إلى مراجعة؟')).toHaveValue('خلطت بين كلمتين');
+  await expect(page.getByLabel('نوع الخطأ')).toHaveValue('substitution');
+  await expect(page.getByLabel('ما قلته', { exact: true })).toHaveValue('كلمة');
+  await expect(page.getByLabel('الصواب', { exact: true })).toHaveValue('أخرى');
+  await page.getByLabel('ما الذي يحتاج إلى مراجعة؟').fill('خلطت بين الكلمتين أثناء المراجعة');
+  await page.screenshot({ path: '.local/arabic-mistake-draft.png', fullPage: true });
   await expect(page.getByLabel('Ayah', { exact: true })).toHaveValue('0');
   await page.getByRole('button', { name: 'Save mistake' }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
   await expect(page.locator('.mistake-card')).toHaveCount(2);
   await page.reload();
+  await expect(page.locator('.mistake-card')).toContainText([
+    'نسيت متابعة الآية',
+    'خلطت بين الكلمتين أثناء المراجعة',
+  ]);
+  await expect(page.locator('.word-correction')).toContainText('كلمة');
+  await expect(page.locator('.word-correction')).toContainText('أخرى');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.locator('#gemini-status')).toContainText('connected');
   const exported = await page.evaluate(async () => {
@@ -79,10 +96,10 @@ test('provider failure keeps the audio and allows a successful retry without los
   );
   await connect(page);
   await openVoiceForm(page);
-  await page.getByLabel('What needs practice?').fill('Keep my typed note');
+  await page.getByLabel('ما الذي يحتاج إلى مراجعة؟').fill('Keep my typed note');
   await page.locator('#voice-file').setInputFiles(sample);
   await expect(page.locator('#voice-status')).toContainText('quota');
-  await expect(page.getByLabel('What needs practice?')).toHaveValue('Keep my typed note');
+  await expect(page.getByLabel('ما الذي يحتاج إلى مراجعة؟')).toHaveValue('Keep my typed note');
   await expect(page.locator('#voice-download')).toHaveAttribute('href', /^blob:/);
   expect(await page.locator('body').innerText()).not.toContain(fakeKey);
   await page.getByRole('button', { name: 'Retry transcription' }).click();
@@ -98,7 +115,7 @@ test('microphone denial leaves manual entry usable', async ({ page }) => {
   await connect(page);
   await page.getByRole('button', { name: 'Record a mistake', exact: true }).click();
   await expect(page.locator('#voice-status')).toContainText('permission was denied');
-  await page.getByLabel('What needs practice?').fill('Entered manually');
+  await page.getByLabel('ما الذي يحتاج إلى مراجعة؟').fill('Entered manually');
   await page.getByRole('button', { name: 'Save mistake' }).click();
   await page.getByRole('link', { name: 'Mistakes', exact: true }).click();
   await expect(page.locator('.mistake-card')).toContainText('Entered manually');
